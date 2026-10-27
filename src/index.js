@@ -814,9 +814,12 @@ async function api(request, env, url) {
       if (method !== 'POST') fail(405, 'Method not allowed.');
       const b = await body(request);
       // Friends & family: only with its link. Guestlist: open on public events, link needed on private ones.
-      const list = b.list === 'ff' ? 'ff' : 'gl';
+      // "going" = simply attending (own ticket, door…); "gl" = guestlist; "ff" = friends & family ticket.
+      const list = b.list === 'ff' ? 'ff' : b.list === 'gl' ? 'gl' : 'going';
       const bk = b.k || '';
-      if (list === 'ff') {
+      if (list === 'going') {
+        if (ev.visibility === 'private' && !isHost && bk !== ev.gl_token && bk !== ev.ff_token) fail(403, 'This event is private. Ask the host for the link.');
+      } else if (list === 'ff') {
         if (!ev.ff_on) fail(403, 'This event has no friends & family tickets.');
         if (!isHost && bk !== ev.ff_token) fail(403, 'Friends & family tickets are sent by the host. You can request one instead.');
       } else {
@@ -831,7 +834,9 @@ async function api(request, env, url) {
       }
       await env.DB.prepare(
         `INSERT INTO rsvps (event_id, user_id, referrer_id, list) VALUES (?, ?, ?, ?)
-         ON CONFLICT(event_id, user_id) DO UPDATE SET list = CASE WHEN excluded.list = 'ff' THEN 'ff' ELSE rsvps.list END`
+         ON CONFLICT(event_id, user_id) DO UPDATE SET list = CASE
+           WHEN excluded.list = 'ff' OR rsvps.list = 'ff' THEN 'ff'
+           WHEN excluded.list = 'gl' OR rsvps.list = 'gl' THEN 'gl' ELSE 'going' END`
       ).bind(ev.id, me.id, referrerId, list).run();
       return json({ going: true });
     }

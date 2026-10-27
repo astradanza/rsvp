@@ -72,7 +72,7 @@
     var dt = new Date(t); return dt.getDate() + ' ' + MONTHS[dt.getMonth()];
   }
   function priceLabel(e) { return e.entry === 'ticket' ? (e.price_cents ? money(e.price_cents, e.currency) : 'Free ticket') : 'Free · RSVP'; }
-  function rsvpLabel(e) { return e.is_going ? 'On the list' : 'Join the guestlist'; }
+  function rsvpLabel(e) { return e.is_going ? 'Going ✓' : 'I\'m going'; }
   function rsvpLabelOld(e) { return e.is_going ? (e.entry === 'ticket' ? 'Going' : 'On the list') : (e.entry === 'ticket' ? 'Get ticket' : 'RSVP'); }
   function shareLink(id) { return location.origin + '/e/' + id + (me ? '?ref=' + me.handle : ''); }
   function copy(text) {
@@ -126,7 +126,7 @@
         (e.starts_at ? '<div class="cardfoot"><span>' + whenLine(e) + '</span></div>' : '') + '</a>';
     }
     h += '<div class="acts">';
-    if (e && e.gl_on && e.visibility === 'public') h += '<button class="pill' + (e.is_going ? ' on' : '') + '" data-act="rsvp" data-list="gl" data-id="' + esc(e.id) + '" data-going="' + (e.is_going ? 1 : 0) + '">' + rsvpLabel(e) + '</button>';
+    if (e && e.visibility === 'public') h += '<button class="pill' + (e.is_going ? ' on' : '') + '" data-act="rsvp" data-list="going" data-id="' + esc(e.id) + '" data-going="' + (e.is_going ? 1 : 0) + '">' + rsvpLabel(e) + '</button>';
     else if (e) h += '<a class="pill" href="/e/' + esc(e.id) + '">Open</a>';
     if (!p.mine) h += '<button class="ico' + (p.i_reposted ? ' on' : '') + '" aria-label="Repost" data-act="repost" data-id="' + p.id + '" data-on="' + (p.i_reposted ? 1 : 0) + '">' + I.rep + '</button>';
     if (e) h += '<button class="ico" aria-label="Copy your referral link" data-act="share" data-id="' + esc(e.id) + '">' + I.share + '</button>';
@@ -308,7 +308,7 @@
       if (e.starts_at) h += '<div class="mono" style="font-size:13px">' + whenLine(e) + '</div>';
       h += '<p class="txt">' + esc(e.caption) + '</p>';
       if (e.friends.length) h += '<div style="display:flex;align-items:center;gap:10px"><div class="faces">' + e.friends.map(function (f) { return '<span class="ring">' + av(f, 26) + '</span>'; }).join('') +
-        '</div><span class="small" style="margin-left:8px">' + e.friends.map(function (f) { return esc(f.name); }).join(', ') + ' ' + (e.friends.length > 1 ? 'are' : 'is') + ' on the list</span></div>';
+        '</div><span class="small" style="margin-left:8px">' + e.friends.map(function (f) { return esc(f.name); }).join(', ') + ' ' + (e.friends.length > 1 ? 'are' : 'is') + ' going</span></div>';
 
       // Joining. A link opens its list directly; otherwise members join the guestlist (public events) or ask.
       var kl = e.key_list || '';
@@ -318,17 +318,18 @@
       var reqFf = e.ff_on && e.ff_requests && !canFf;
       if (me) {
         h += '<div class="acts" style="flex-wrap:wrap">';
-        if (e.my_list) {
-          h += '<button class="pill big on" data-act="rsvp" data-id="' + esc(e.id) + '" data-going="1">' + (e.my_list === 'ff' ? 'Friends & family ticket ✓' : 'On the guestlist ✓') + '</button>';
-          if (e.my_list === 'gl' && canFf) h += '<button class="pill" data-act="rsvp" data-list="ff" data-id="' + esc(e.id) + '" data-going="0">Take my friends &amp; family ticket</button>';
-        } else {
-          if (canFf) h += '<button class="pill big solid" data-act="rsvp" data-list="ff" data-id="' + esc(e.id) + '" data-going="0">Get my friends &amp; family ticket</button>';
-          if (canGl) h += '<button class="pill big ' + (canFf ? '' : 'solid') + '" data-act="rsvp" data-list="gl" data-id="' + esc(e.id) + '" data-going="0">Join the guestlist</button>';
-        }
+        // "I'm going" always comes first; guestlist and friends & family are extras when the host offers them.
+        var ml = e.my_list;
+        h += ml ? '<button class="pill big on" data-act="rsvp" data-id="' + esc(e.id) + '" data-going="1">Going ✓</button>'
+                : '<button class="pill big solid" data-act="rsvp" data-list="going" data-id="' + esc(e.id) + '" data-going="0">I\'m going</button>';
+        if (ml === 'gl') h += '<span class="small">On the guestlist</span>';
+        if (ml === 'ff') h += '<span class="small">Friends &amp; family ticket</span>';
+        if (ml !== 'ff' && canFf) h += '<button class="pill" data-act="rsvp" data-list="ff" data-id="' + esc(e.id) + '" data-going="0">Get my friends &amp; family ticket</button>';
+        if (!ml || ml === 'going') { if (canGl) h += '<button class="pill" data-act="rsvp" data-list="gl" data-id="' + esc(e.id) + '" data-going="0">Join the guestlist</button>'; }
         if (e.my_request && e.my_request.status === 'pending') h += '<span class="small">Request sent for ' + (e.my_request.list === 'ff' ? 'a friends & family ticket' : 'the guestlist') + '. The host will confirm.</span>';
-        else if (!e.my_list || e.my_list === 'gl') {
-          if (reqFf) h += '<button class="pill" data-act="reqlist" data-list="ff" data-id="' + esc(e.id) + '">Request a friends &amp; family ticket</button>';
-          if (reqGl && !e.my_list) h += '<button class="pill" data-act="reqlist" data-list="gl" data-id="' + esc(e.id) + '">Request the guestlist</button>';
+        else {
+          if (ml !== 'ff' && reqFf) h += '<button class="pill" data-act="reqlist" data-list="ff" data-id="' + esc(e.id) + '">Request a friends &amp; family ticket</button>';
+          if ((!ml || ml === 'going') && reqGl) h += '<button class="pill" data-act="reqlist" data-list="gl" data-id="' + esc(e.id) + '">Request the guestlist</button>';
         }
         if (e.visibility === 'public') h += '<button class="ico" aria-label="Copy link" data-act="share" data-id="' + esc(e.id) + '">' + I.share + '</button>';
         h += '</div>';
@@ -389,11 +390,12 @@
         });
         h += '</section>';
       }
-      ['ff', 'gl'].forEach(function (l) {
+      ['ff', 'gl', 'going'].forEach(function (l) {
         var members = j.guests.filter(function (g) { return (g.list || 'gl') === l; });
         var others = approved.filter(function (r) { return (r.list || 'gl') === l; });
         if (l === 'ff' && !e.ff_on && !members.length && !others.length) return;
         if (l === 'gl' && !e.gl_on && !members.length && !others.length) return;
+        if (l === 'going' && !members.length) return;
         h += '<section class="box"><span class="label">' + LISTS[l] + '</span>';
         members.forEach(function (g) {
           h += '<a class="row" href="/' + esc(g.handle) + '">' + av(g, 28) + '<span class="name" style="flex:1">' + esc(g.name) + '</span><span class="small">' + (g.ref_handle ? 'via @' + esc(g.ref_handle) : '@' + esc(g.handle)) + '</span></a>';
@@ -461,7 +463,7 @@
       check('ff_on', !!v.ff_on, 'Friends & family tickets', 'Special tickets you send with their own link.') +
       check('ff_requests', !!v.ff_requests, 'Accept friends & family requests', 'People can ask for one; you accept or decline.') + '</fieldset>';
   }
-  var LISTS = { gl: 'Guestlist', ff: 'Friends & family' };
+  var LISTS = { gl: 'Guestlist', ff: 'Friends & family', going: 'Going' };
 
 
   function viewNewEvent() {
@@ -696,11 +698,11 @@
         say(on ? 'Unfollowed @' + id : 'Following @' + id);
       }).catch(function (e) { say(e.message); }).then(done);
     } else if (act === 'rsvp') {
-      var going = b.getAttribute('data-going') === '1', ref = null, rlist = b.getAttribute('data-list') || 'gl';
+      var going = b.getAttribute('data-going') === '1', ref = null, rlist = b.getAttribute('data-list') || 'going';
       try { ref = sessionStorage.getItem('ref:' + id); } catch (e) {}
       var gk = ''; try { gk = sessionStorage.getItem('k:' + id) || ''; } catch (e) {}
       api(going ? 'DELETE' : 'POST', '/events/' + id + '/rsvp', going ? undefined : { ref: ref, k: gk, list: rlist }).then(function () {
-        say(going ? 'Cancelled.' : rlist === 'ff' ? 'Your friends & family ticket is confirmed.' : 'You\'re on the guestlist.'); route();
+        say(going ? 'Cancelled.' : rlist === 'ff' ? 'Your friends & family ticket is confirmed.' : rlist === 'gl' ? 'You\'re on the guestlist.' : 'See you there.'); route();
       }).catch(function (e) { say(e.message); done(); });
     } else if (act === 'repost') {
       var r = b.getAttribute('data-on') === '1';
