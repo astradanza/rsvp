@@ -205,6 +205,7 @@
     header({ back: true, title: 'rsvp.fm/' + handle }); setTab(me && me.handle === handle ? 'me' : ''); loading();
     api('GET', '/users/' + encodeURIComponent(handle)).then(function (j) {
       var u = j.user, h = '';
+      if (u.handle !== handle) history.replaceState({}, '', '/' + u.handle);
       if (j.is_me) {
         header({ back: false, title: '', right: '<a class="ico" aria-label="Settings" href="/settings">' + I.gear + '</a>' });
         hdr.querySelector('.logo').insertAdjacentHTML('afterend', '<a class="pill ghost" href="/switch" aria-label="Switch account" style="margin-left:8px;gap:6px;color:var(--fg)">@' + esc(u.handle) + ' <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></a>');
@@ -454,6 +455,8 @@
       (me.banner ? '<button class="pill ghost" data-act="rmbanner">Remove</button>' : '') + '</div>' +
       '<p class="small" style="margin:0">Wide images work best (3 to 1). We crop the center.</p></div>' +
       '<div class="gut section sep"><h2>Your page</h2><form id="f-me">' +
+      '<div class="field"><label for="handle">Handle</label><input id="handle" name="handle" autocapitalize="none" autocomplete="off" pattern="[a-z0-9_]{2,24}" maxlength="24" value="' + esc(me.handle) + '" required>' +
+      '<span class="small">rsvp.fm/<span id="hprev">' + esc(me.handle) + '</span> · old links to your page keep working</span></div>' +
       '<div class="field"><label for="name">Display name</label><input id="name" name="name" maxlength="60" value="' + esc(me.name) + '" required></div>' +
       '<div class="field"><label for="bio">Bio</label><textarea id="bio" name="bio" rows="3" maxlength="280">' + esc(me.bio) + '</textarea></div>' +
       '<div class="field"><label for="city">City</label><input id="city" name="city" maxlength="60" value="' + esc(me.city) + '"></div>' +
@@ -484,6 +487,11 @@
     main.innerHTML = h;
     loadInvites();
     if (me.is_admin) loadAmbassadors();
+    var hin = document.getElementById('handle');
+    if (hin) hin.addEventListener('input', function () {
+      hin.value = hin.value.toLowerCase().replace(/[^a-z0-9_]/g, '');
+      document.getElementById('hprev').textContent = hin.value || 'handle';
+    });
     if (location.hash === '#create') setTimeout(function () { var c = document.getElementById('create'); if (c) c.scrollIntoView(); }, 60);
   }
   function inviteUrl(code) { return location.origin + '/i/' + code; }
@@ -645,9 +653,11 @@
       api('POST', '/events', d).then(function (j) { say('Your night is live.'); go('/e/' + j.id, true); }).catch(showErr);
     } else if (f.id === 'f-me') {
       api('PATCH', '/me', d).then(function (j) {
+        var renamed = j.user.handle !== me.handle;
         for (var k in j.user) me[k] = j.user[k];
+        if (renamed) { setTab('me'); say('Your page is now rsvp.fm/' + me.handle); }
         var ap = document.getElementById('avprev'); if (ap) ap.innerHTML = av(me, 72);
-        say('Saved.'); if (btn) btn.disabled = false;
+        if (!renamed) say('Saved.'); if (btn) btn.disabled = false;
       }).catch(showErr);
     } else if (f.id === 'f-admin-invites') {
       api('POST', '/admin/invites', { count: 5 }).then(function (j) {

@@ -10,6 +10,7 @@ Runs entirely on Cloudflare: one Worker (API + static app) and one D1 database.
 - Invite-only sign-up. The very first account needs no invite and becomes the admin. Every member has one personal invite link (`rsvp.fm/i/code`) good for 10 sign-ups, sees who joined through it and how many are left, and can replace it if it leaks.
 - Ambassadors: admins see members running low on invites (2 or fewer left) on their feed and in Settings, and can make them ambassadors (50 invites) or top them up by 10.
 - Pages `rsvp.fm/handle` with color, bio, city, follower counts, Top 8, upcoming nights, posts, and a public wall: any member can write on it, the author or the page owner can delete.
+- Change your handle from Settings. Old handles keep redirecting to you (pages and referral links don't break) and can't be taken by anyone else.
 - Follow / unfollow. Feed = posts and reposts from people you follow, newest first. No algorithm.
 - Posts and reposts. Members can post; anyone can repost.
 - Nights (promoters and artists): free guestlist or ticket, price, referral commission %, capacity, line-up, color. Publishing a night posts an announcement.

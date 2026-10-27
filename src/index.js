@@ -30,6 +30,10 @@ function ensureSchema(env) {
           author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           text TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
         env.DB.prepare('CREATE INDEX IF NOT EXISTS wall_owner ON wall(owner_id, created_at)'),
+        // Old handles keep redirecting to their owner after a rename (migrations/0006_handle_history.sql)
+        env.DB.prepare(`CREATE TABLE IF NOT EXISTS handle_history (handle TEXT PRIMARY KEY COLLATE NOCASE,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          changed_at TEXT NOT NULL DEFAULT (datetime('now')))`),
         // Uploaded profile photos and headers (migrations/0004_images.sql)
         env.DB.prepare(`CREATE TABLE IF NOT EXISTS images (id TEXT PRIMARY KEY,
           owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -240,7 +244,11 @@ async function hydratePosts(env, rows, me) {
 }
 
 async function userByHandle(env, handle) {
-  return env.DB.prepare('SELECT * FROM users WHERE handle = ?').bind(String(handle).toLowerCase()).first();
+  const h = String(handle).toLowerCase().replace(/^@/, '');
+  const u = await env.DB.prepare('SELECT * FROM users WHERE handle = ?').bind(h).first();
+  if (u) return u;
+  // a renamed account is still found by its old handle (old links and referral links keep working)
+  return env.DB.prepare('SELECT u.* FROM handle_history hh JOIN users u ON u.id = hh.user_id WHERE hh.handle = ?').bind(h).first();
 }
 function requireUser(me) { if (!me) fail(401, 'Log in to do that.'); return me; }
 
@@ -307,7 +315,7 @@ async function api(request, env, url) {
       if (RESERVED.has(handle)) fail(400, 'That handle is reserved. Pick another one.');
       let email = str(b.email, 120).toLowerCase();
       if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail(400, 'Enter a valid email address, or leave it empty.');
-      if (await env.DB.prepare('SELECT 1 FROM users WHERE handle = ? OR (? != \'\' AND email = ?)').bind(handle, email, email).first()) fail(409, 'That handle or email is already taken.');
+      if (await env.DB.prepare('SELECT 1 FROM users WHERE handle = ? OR (? != \'\' AND email = ?) UNION SELECT 1 FROM handle_history WHERE handle = ?').bind(handle, email, email, handle).first()) fail(409, 'That handle or email is already taken.');
       if (!email) email = `${handle}.${randomCode(6)}@pages.rsvp.fm`; // placeholder: the page is reached by switching, not by email
       const stats = await inviteStats(env, me);
       if (!stats.unlimited && stats.remaining <= 0) fail(403, 'You have used all your invites, and each new page uses one. Ask us for more.');
@@ -375,9 +383,29 @@ async function api(request, env, url) {
     }
     let banner = me.banner;
     if (b.banner === '') { await dropImage(env, me, me.banner); banner = ''; }
-    await env.DB.prepare('UPDATE users SET name = ?, bio = ?, city = ?, color = ?, kind = ?, avatar = ?, banner = ? WHERE id = ?')
-      .bind(name, bio, city, color, kind, avatar, banner, me.id).run();
-    return json({ user: publicUser({ ...me, name, bio, city, color, kind, avatar, banner }) });
+    let handle = me.handle;
+    if (typeof b.handle === 'string' && b.handle.trim().toLowerCase().replace(/^@/, '') !== me.handle) {
+      const h = b.handle.trim().toLowerCase().replace(/^@/, '');
+      if (!HANDLE_RE.test(h)) fail(400, 'Handles use 2 to 24 lowercase letters, digits or underscores.');
+      if (RESERVED.has(h)) fail(400, 'That handle is reserved. Pick another one.');
+      const taken = await env.DB.prepare(
+        `SELECT 1 FROM users WHERE handle = ?1 AND id != ?2
+         UNION SELECT 1 FROM handle_history WHERE handle = ?1 AND user_id != ?2`
+      ).bind(h, me.id).first();
+      if (taken) fail(409, 'That handle is already taken.');
+      const recent = await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM handle_history WHERE user_id = ? AND changed_at > datetime('now', '-1 day')`
+      ).bind(me.id).first();
+      if (recent.n >= 3) fail(429, 'You changed your handle several times today. Try again tomorrow.');
+      await env.DB.batch([
+        env.DB.prepare('DELETE FROM handle_history WHERE handle = ? AND user_id = ?').bind(h, me.id),
+        env.DB.prepare(`INSERT OR REPLACE INTO handle_history (handle, user_id, changed_at) VALUES (?, ?, datetime('now'))`).bind(me.handle, me.id)
+      ]);
+      handle = h;
+    }
+    await env.DB.prepare('UPDATE users SET handle = ?, name = ?, bio = ?, city = ?, color = ?, kind = ?, avatar = ?, banner = ? WHERE id = ?')
+      .bind(handle, name, bio, city, color, kind, avatar, banner, me.id).run();
+    return json({ user: publicUser({ ...me, handle, name, bio, city, color, kind, avatar, banner }) });
   }
   if (path === '/api/me/image' && method === 'POST') {
     requireUser(me);
@@ -757,7 +785,7 @@ async function signup(request, env, url) {
       if (!invite) fail(403, 'rsvp.fm is invite-only for now. That invite link is not valid or was already used.');
     }
   }
-  if (await env.DB.prepare('SELECT 1 FROM users WHERE handle = ? OR email = ?').bind(handle, email).first()) {
+  if (await env.DB.prepare('SELECT 1 FROM users WHERE handle = ? OR email = ? UNION SELECT 1 FROM handle_history WHERE handle = ?').bind(handle, email, handle).first()) {
     fail(409, 'That handle or email is already taken.');
   }
   const palette = ['#E23B2E', '#2F55D4', '#E8A80C', '#1E8C6E', '#9B59D0', '#D23C7A', '#1FA4B4'];
