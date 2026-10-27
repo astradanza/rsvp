@@ -4,9 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler d1 migrations apply DB --local && wrangler dev",
-    "db:migrate": "wrangler d1 migrations apply DB --remote",
-    "deploy": "npm run db:migrate && wrangler deploy"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
   },
   "devDependencies": {
     "wrangler": "4.150.0"

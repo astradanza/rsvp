@@ -158,7 +158,13 @@
       j.items.forEach(function (p) { h += postHtml(p); });
       if (!j.items.length) h += '<div class="end">Your feed is empty. Follow a few people in <a class="accent" href="/discover">Discover</a>, or post something.</div>';
       else h += '<div class="end">You\'re all caught up.</div>';
-      main.innerHTML = h;
+      main.innerHTML = '<div id="alert"></div>' + h;
+      if (me.is_admin) api('GET', '/admin/ambassadors').then(function (a) {
+        var el = document.getElementById('alert');
+        if (!el || !a.low.length) return;
+        el.innerHTML = '<a href="/settings" class="gut bar" style="display:block;background:var(--accent);color:var(--ink);font-weight:700;padding-block:12px">' +
+          (a.low.length === 1 ? '@' + esc(a.low[0].handle) + ' is' : a.low.length + ' members are') + ' running low on invites. Make them ambassadors →</a>';
+      }).catch(function () {});
     }).catch(showError);
   }
 
@@ -197,7 +203,7 @@
       h += '<div class="banner" style="background:' + esc(u.color) + '"><div style="position:absolute;width:120px;height:120px;border-radius:50%;border:3px solid var(--ink);right:24px;top:-40px"></div><div style="position:absolute;width:40px;height:40px;border-radius:50%;background:var(--ink);right:140px;top:40px"></div></div>';
       h += '<div class="gut" style="display:flex;flex-direction:column;gap:10px;padding-block:0 16px"><div class="ptop"><span class="ring">' + av(u, 68) + '</span>' +
         (j.is_me ? '<a class="pill" href="/settings">Edit page</a>' : (me ? followBtn(u, j.is_following) : '<a class="pill solid" href="/login?next=/' + esc(u.handle) + '">Follow</a>')) + '</div>';
-      h += '<div><h1>' + esc(u.name) + '</h1><div class="mono accent" style="font-size:12px;margin-top:2px">rsvp.fm/' + esc(u.handle) + '</div></div>';
+      h += '<div><h1>' + esc(u.name) + '</h1><div class="mono accent" style="font-size:12px;margin-top:2px">rsvp.fm/' + esc(u.handle) + (u.ambassador ? ' · AMBASSADOR' : '') + '</div></div>';
       if (u.bio) h += '<p class="txt" style="font-size:14px">' + esc(u.bio) + '</p>';
       h += '<div class="stats"><span><strong>' + j.followers + '</strong> followers</span><span><strong>' + j.following + '</strong> following</span><span>' + esc(u.kind) + (u.city ? ' · ' + esc(u.city) : '') + '</span></div></div>';
       if (j.is_me) h += '<div id="mine"></div>';
@@ -372,23 +378,59 @@
       ['member', 'artist', 'promoter'].map(function (k) { return '<label><input type="radio" name="kind" value="' + k + '"' + (me.kind === k ? ' checked' : '') + '><span>' + k.charAt(0).toUpperCase() + k.slice(1) + '</span></label>'; }).join('') +
       '</div></fieldset><fieldset><legend class="field">Page color</legend>' + swatches('color', me.color) + '</fieldset>' +
       '<p class="err" id="err" hidden></p><button class="pill big solid" type="submit">Save</button></form></div>' +
-      '<div class="gut section sep"><h2>Your invites</h2><p class="small" style="margin:0">Each code lets one person join. Send the link to someone you would vouch for.</p><div id="invites"></div></div>';
+      '<div class="gut section sep" id="invites"><h2>Your invite link</h2><p class="small" style="margin:0">Loading…</p></div>';
     if (me.is_admin) {
-      h += '<div class="gut section sep"><h2>Admin</h2><form id="f-admin-invites" class="acts"><button class="pill" type="submit">Create 5 invite codes</button></form>' +
+      h += '<div class="gut section sep" id="ambassadors"></div>' +
+        '<div class="gut section sep"><h2>Admin</h2><form id="f-admin-invites" class="acts"><button class="pill" type="submit">Create 5 single-use codes</button></form>' +
         '<form id="f-feature"><div class="field"><label for="fhandle">Feature in Discover (handle)</label><input id="fhandle" name="handle" autocapitalize="none" required></div>' +
         '<div class="acts"><button class="pill" type="submit" name="featured" value="1">Feature</button><button class="pill ghost" type="submit" name="featured" value="0">Remove</button></div></form><div id="admin-out"></div></div>';
     }
     h += '<div class="gut section sep"><button class="pill ghost" data-act="logout">Log out</button></div>';
     main.innerHTML = h;
     loadInvites();
+    if (me.is_admin) loadAmbassadors();
   }
+  function inviteUrl(code) { return location.origin + '/i/' + code; }
   function loadInvites() {
     api('GET', '/me/invites').then(function (j) {
       var el = document.getElementById('invites'); if (!el) return;
-      el.innerHTML = '<table><tbody>' + j.invites.map(function (i) {
-        return '<tr><td class="code">' + esc(i.code) + '</td><td class="n">' + (i.used_by ? '<a class="muted" href="/' + esc(i.used_by) + '">used by @' + esc(i.used_by) + '</a>' :
-          '<button class="pill" data-act="copyinvite" data-id="' + esc(i.code) + '">Copy link</button>') + '</td></tr>';
-      }).join('') + '</tbody></table>';
+      var h = '<h2>Your invite link</h2>';
+      h += '<p class="small" style="margin:0">One link for everyone you vouch for. ' + (j.unlimited ? 'As admin, yours has no limit.' : 'It works for ' + j.quota + ' sign-ups.') + '</p>';
+      h += '<div class="ref" style="border-style:solid"><span class="mono" style="font-size:14px;overflow-wrap:anywhere">' + esc(inviteUrl(j.link).replace(/^https?:\/\//, '')) + '</span>' +
+        '<div class="acts"><button class="pill on" data-act="copyinvite" data-id="' + esc(j.link) + '">Copy link</button>' +
+        '<button class="pill ghost" data-act="regeninvite">New link</button></div></div>';
+      if (!j.unlimited) {
+        var pct = Math.min(100, Math.round(100 * j.used / Math.max(1, j.quota)));
+        h += '<div style="display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between" class="small"><span>' + j.used + ' joined</span><span><strong style="color:var(--fg)">' + j.remaining + '</strong> left of ' + j.quota + '</span></div>' +
+          '<div style="height:6px;border-radius:3px;background:var(--line);overflow:hidden"><div style="height:100%;width:' + pct + '%;background:var(--accent)"></div></div></div>';
+        if (j.remaining === 0) h += '<p class="small" style="margin:0">Your link is used up. We\'ll be in touch.</p>';
+      } else h += '<p class="small" style="margin:0">' + j.used + ' joined through your link.</p>';
+      if (j.joined.length) {
+        h += '<div><span class="label">Joined through you</span><div class="grid4" style="margin-top:10px">';
+        j.joined.forEach(function (u) { h += '<a class="g" href="/' + esc(u.handle) + '">' + av(u, 48) + '<span>' + esc(u.name) + '</span></a>'; });
+        h += '</div></div>';
+      }
+      el.innerHTML = h;
+    }).catch(function (e) { var el = document.getElementById('invites'); if (el) el.innerHTML = '<p class="err">' + esc(e.message) + '</p>'; });
+  }
+  function personRow(u, actions) {
+    return '<div class="row" style="gap:12px"><a href="/' + esc(u.handle) + '" style="display:flex;align-items:center;gap:10px;min-width:0;flex:1">' + av(u, 36) +
+      '<span style="min-width:0"><span class="name">' + esc(u.name) + (u.ambassador ? ' <span class="accent mono" style="font-size:11px">AMBASSADOR</span>' : '') + '</span>' +
+      '<span class="meta">@' + esc(u.handle) + ' · ' + u.used + ' joined · ' + u.remaining + ' left · ' + esc(u.email) + '</span></span></a>' + actions + '</div>';
+  }
+  function loadAmbassadors() {
+    api('GET', '/admin/ambassadors').then(function (j) {
+      var el = document.getElementById('ambassadors'); if (!el) return;
+      var h = '<h2>Running low on invites</h2><p class="small" style="margin:0">Members with ' + j.threshold + ' invites left or fewer. Reach out, then make them ambassadors (' + 50 + ' invites).</p>';
+      if (j.low.length) j.low.forEach(function (u) {
+        h += personRow(u, '<div style="display:flex;flex-direction:column;gap:6px"><button class="pill on" data-act="ambassador" data-id="' + esc(u.handle) + '">Ambassador</button>' +
+          '<button class="pill ghost" data-act="addquota" data-id="' + esc(u.handle) + '">+10</button></div>');
+      });
+      else h += '<p class="small" style="margin:0">No one yet.</p>';
+      h += '<h2 style="margin-top:16px">Ambassadors</h2>';
+      if (j.ambassadors.length) j.ambassadors.forEach(function (u) { h += personRow(u, '<button class="pill ghost" data-act="addquota" data-id="' + esc(u.handle) + '">+10</button>'); });
+      else h += '<p class="small" style="margin:0">None yet.</p>';
+      el.innerHTML = h;
     }).catch(function () {});
   }
 
@@ -402,6 +444,7 @@
     if (p === '/new/event') return viewNewEvent();
     if (p === '/login') return viewLogin();
     if (p === '/signup' || p === '/invite') return viewSignup();
+    if ((m = /^\/i\/([a-z0-9]+)$/i.exec(p))) return go('/signup?invite=' + m[1].toLowerCase(), true);
     if (p === '/settings') return viewSettings();
     if ((m = /^\/e\/([a-z0-9]+)$/i.exec(p))) return viewEvent(m[1]);
     if ((m = /^\/@?([a-z0-9_]{2,24})$/i.exec(p))) return viewProfile(m[1].toLowerCase());
@@ -418,7 +461,7 @@
     var act = b.getAttribute('data-act'), id = b.getAttribute('data-id');
     if (act === 'back') { if (history.length > 1) history.back(); else go('/'); return; }
     if (act === 'share') return copy(shareLink(id));
-    if (act === 'copyinvite') return copy(location.origin + '/signup?invite=' + id);
+    if (act === 'copyinvite') return copy(inviteUrl(id));
     if (!me) return needLogin();
     b.disabled = true;
     var done = function () { b.disabled = false; };
@@ -445,6 +488,13 @@
     } else if (act === 'delevent') {
       if (b.getAttribute('data-confirm') !== '1') { b.setAttribute('data-confirm', '1'); b.textContent = 'Tap again to delete the event and its guestlist'; return done(); }
       api('DELETE', '/events/' + id).then(function () { say('Event deleted.'); go('/' + me.handle); }).catch(function (e) { say(e.message); done(); });
+    } else if (act === 'regeninvite') {
+      if (b.getAttribute('data-confirm') !== '1') { b.setAttribute('data-confirm', '1'); b.textContent = 'Tap again: the old link stops working'; return done(); }
+      api('POST', '/me/invites/regenerate', {}).then(function () { say('New invite link ready.'); loadInvites(); }).catch(function (e) { say(e.message); done(); });
+    } else if (act === 'ambassador') {
+      api('POST', '/admin/ambassador', { handle: id }).then(function (j) { say('@' + id + ' is now an ambassador with ' + j.quota + ' invites.'); loadAmbassadors(); }).catch(function (e) { say(e.message); done(); });
+    } else if (act === 'addquota') {
+      api('POST', '/admin/quota', { handle: id, add: 10 }).then(function () { say('Gave @' + id + ' 10 more invites.'); loadAmbassadors(); }).catch(function (e) { say(e.message); done(); });
     } else if (act === 'logout') {
       api('POST', '/logout', {}).then(function () { me = null; go('/'); }).catch(function (e) { say(e.message); done(); });
     } else done();

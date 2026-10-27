@@ -2,16 +2,32 @@
 import { SCHEMA } from './schema.js';
 
 // Create the tables on first use (idempotent), so a plain `wrangler deploy` is enough.
+// Columns added after launch: added here if missing (mirrors migrations/0002_invite_links.sql).
+const ADDED_COLUMNS = [
+  ['users', 'invite_link', 'TEXT'],
+  ['users', 'invite_quota', 'INTEGER NOT NULL DEFAULT 10'],
+  ['users', 'invited_by', 'INTEGER'],
+  ['users', 'ambassador', 'INTEGER NOT NULL DEFAULT 0']
+];
 let schemaReady = null;
 function ensureSchema(env) {
   if (!schemaReady) {
-    schemaReady = env.DB.batch(SCHEMA.map((s) => env.DB.prepare(s))).catch((e) => { schemaReady = null; throw e; });
+    schemaReady = (async () => {
+      await env.DB.batch(SCHEMA.map((s) => env.DB.prepare(s)));
+      const cols = new Set((await env.DB.prepare('PRAGMA table_info(users)').all()).results.map((c) => c.name));
+      const missing = ADDED_COLUMNS.filter(([, c]) => !cols.has(c));
+      if (missing.length) await env.DB.batch(missing.map(([t, c, def]) => env.DB.prepare(`ALTER TABLE ${t} ADD COLUMN ${c} ${def}`)));
+      await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS users_invite_link ON users(invite_link)').run();
+      await env.DB.prepare('CREATE INDEX IF NOT EXISTS users_invited_by ON users(invited_by)').run();
+    })().catch((e) => { schemaReady = null; throw e; });
   }
   return schemaReady;
 }
 
 const SESSION_DAYS = 30;
-const INVITES_PER_MEMBER = 3;
+const DEFAULT_QUOTA = 10;      // sign-ups per personal invite link
+const AMBASSADOR_QUOTA = 50;
+const LOW_INVITES = 2;         // admins are alerted when a member has this many left or fewer
 const RESERVED = new Set([
   'api', 'e', 'new', 'login', 'signup', 'logout', 'discover', 'settings', 'feed', 'about', 'admin',
   'assets', 'static', 'invite', 'invites', 'me', 'help', 'terms', 'privacy', 'rsvp', 'www', 'app',
@@ -125,8 +141,23 @@ async function startSession(env, userId, url) {
 function publicUser(u) {
   return {
     handle: u.handle, name: u.name, kind: u.kind, bio: u.bio, city: u.city, color: u.color,
-    featured: !!u.featured
+    featured: !!u.featured, ambassador: !!u.ambassador
   };
+}
+
+// Each member has one personal invite link, valid for `invite_quota` sign-ups. Admins have no limit.
+async function inviteLinkFor(env, u) {
+  if (u.invite_link) return u.invite_link;
+  const code = randomCode(8);
+  await env.DB.prepare('UPDATE users SET invite_link = ? WHERE id = ? AND invite_link IS NULL').bind(code, u.id).run();
+  const row = await env.DB.prepare('SELECT invite_link FROM users WHERE id = ?').bind(u.id).first();
+  return row.invite_link;
+}
+async function inviteStats(env, u) {
+  const { used } = await env.DB.prepare('SELECT COUNT(*) AS used FROM users WHERE invited_by = ?').bind(u.id).first();
+  const unlimited = !!u.is_admin;
+  const quota = u.invite_quota == null ? DEFAULT_QUOTA : u.invite_quota;
+  return { used, quota, unlimited, remaining: unlimited ? null : Math.max(0, quota - used) };
 }
 function eventShape(e) {
   return {
@@ -233,11 +264,18 @@ async function api(request, env, url) {
   }
   if (path === '/api/me/invites' && method === 'GET') {
     requireUser(me);
-    const rows = (await env.DB.prepare(
-      `SELECT i.code, i.used_at, u.handle AS used_by FROM invites i LEFT JOIN users u ON u.id = i.used_by
-       WHERE i.created_by = ? ORDER BY i.created_at`
+    const link = await inviteLinkFor(env, me);
+    const stats = await inviteStats(env, me);
+    const joined = (await env.DB.prepare(
+      `SELECT handle, name, color, created_at FROM users WHERE invited_by = ? ORDER BY created_at DESC`
     ).bind(me.id).all()).results;
-    return json({ invites: rows });
+    return json({ link, ...stats, joined });
+  }
+  if (path === '/api/me/invites/regenerate' && method === 'POST') {
+    requireUser(me);
+    const code = randomCode(8);
+    await env.DB.prepare('UPDATE users SET invite_link = ? WHERE id = ?').bind(code, me.id).run();
+    return json({ link: code });
   }
   if (path === '/api/me/referrals' && method === 'GET') {
     requireUser(me);
@@ -478,6 +516,35 @@ async function api(request, env, url) {
       await env.DB.prepare('UPDATE users SET featured = ? WHERE id = ?').bind(b.featured ? 1 : 0, u.id).run();
       return json({ ok: true });
     }
+    // Members running low on invites (candidates to become ambassadors) and current ambassadors.
+    if (seg[1] === 'ambassadors' && method === 'GET') {
+      const rows = (await env.DB.prepare(
+        `SELECT u.*, (SELECT COUNT(*) FROM users x WHERE x.invited_by = u.id) AS used
+         FROM users u WHERE u.is_admin = 0`
+      ).all()).results;
+      const shape = (u) => ({ ...publicUser(u), email: u.email, used: u.used, quota: u.invite_quota, remaining: Math.max(0, u.invite_quota - u.used) });
+      const low = rows.filter((u) => !u.ambassador && u.used > 0 && u.invite_quota - u.used <= LOW_INVITES).map(shape)
+        .sort((a, b) => a.remaining - b.remaining || b.used - a.used);
+      const ambassadors = rows.filter((u) => u.ambassador).map(shape).sort((a, b) => b.used - a.used);
+      return json({ low, ambassadors, threshold: LOW_INVITES });
+    }
+    if (seg[1] === 'ambassador' && method === 'POST') {
+      const b = await body(request);
+      const u = await userByHandle(env, b.handle || '');
+      if (!u) fail(404, 'No one has that handle.');
+      const on = b.ambassador !== false;
+      const quota = on ? Math.max(u.invite_quota, Math.min(1000, Number(b.quota) || AMBASSADOR_QUOTA)) : u.invite_quota;
+      await env.DB.prepare('UPDATE users SET ambassador = ?, invite_quota = ? WHERE id = ?').bind(on ? 1 : 0, quota, u.id).run();
+      return json({ ok: true, quota });
+    }
+    if (seg[1] === 'quota' && method === 'POST') {
+      const b = await body(request);
+      const u = await userByHandle(env, b.handle || '');
+      if (!u) fail(404, 'No one has that handle.');
+      const add = Math.min(500, Math.max(1, Number(b.add) || 10));
+      await env.DB.prepare('UPDATE users SET invite_quota = invite_quota + ? WHERE id = ?').bind(add, u.id).run();
+      return json({ ok: true });
+    }
   }
 
   fail(404, 'Not found.');
@@ -497,33 +564,38 @@ async function signup(request, env, url) {
 
   const { n } = await env.DB.prepare('SELECT COUNT(*) AS n FROM users').first();
   const first = n === 0;
-  let invite = null;
+  let invite = null;   // single-use admin code
+  let inviter = null;  // owner of a personal invite link
   if (!first) {
-    invite = await env.DB.prepare('SELECT * FROM invites WHERE code = ? AND used_by IS NULL').bind(str(b.invite, 40).toLowerCase()).first();
-    if (!invite) fail(403, 'rsvp.fm is invite-only for now. That invite code is not valid or was already used.');
+    const code = str(b.invite, 40).toLowerCase();
+    inviter = code ? await env.DB.prepare('SELECT * FROM users WHERE invite_link = ?').bind(code).first() : null;
+    if (inviter) {
+      const s = await inviteStats(env, inviter);
+      if (!s.unlimited && s.remaining <= 0) fail(403, `@${inviter.handle}'s invite link has been used ${s.quota} times already. Ask them for a new invite.`);
+    } else {
+      invite = code ? await env.DB.prepare('SELECT * FROM invites WHERE code = ? AND used_by IS NULL').bind(code).first() : null;
+      if (!invite) fail(403, 'rsvp.fm is invite-only for now. That invite link is not valid or was already used.');
+    }
   }
   if (await env.DB.prepare('SELECT 1 FROM users WHERE handle = ? OR email = ?').bind(handle, email).first()) {
     fail(409, 'That handle or email is already taken.');
   }
   const palette = ['#E23B2E', '#2F55D4', '#E8A80C', '#1E8C6E', '#9B59D0', '#D23C7A', '#1FA4B4'];
   const color = COLOR_RE.test(b.color || '') ? b.color : palette[Math.floor(Math.random() * palette.length)];
+  const invitedBy = inviter ? inviter.id : (invite ? invite.created_by : null);
   const user = await env.DB.prepare(
-    `INSERT INTO users (handle, email, password_hash, name, kind, color, is_admin, featured)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`
-  ).bind(handle, email, await hashPassword(password), name, kind, color, first ? 1 : 0, first ? 1 : 0).first();
+    `INSERT INTO users (handle, email, password_hash, name, kind, color, is_admin, featured, invite_link, invite_quota, invited_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`
+  ).bind(handle, email, await hashPassword(password), name, kind, color, first ? 1 : 0, first ? 1 : 0,
+    randomCode(8), DEFAULT_QUOTA, invitedBy).first();
 
   const stmts = [];
-  if (invite) {
-    stmts.push(env.DB.prepare(`UPDATE invites SET used_by = ?, used_at = datetime('now') WHERE code = ?`).bind(user.id, invite.code));
-    // follow whoever invited you, and they follow you back
-    if (invite.created_by) {
-      stmts.push(env.DB.prepare('INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)').bind(user.id, invite.created_by));
-      stmts.push(env.DB.prepare('INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)').bind(invite.created_by, user.id));
-    }
+  if (invite) stmts.push(env.DB.prepare(`UPDATE invites SET used_by = ?, used_at = datetime('now') WHERE code = ?`).bind(user.id, invite.code));
+  // follow whoever invited you, and they follow you back
+  if (invitedBy) {
+    stmts.push(env.DB.prepare('INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)').bind(user.id, invitedBy));
+    stmts.push(env.DB.prepare('INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)').bind(invitedBy, user.id));
   }
-  for (let i = 0; i < INVITES_PER_MEMBER; i++) {
-    stmts.push(env.DB.prepare('INSERT INTO invites (code, created_by) VALUES (?, ?)').bind(randomCode(10), user.id));
-  }
-  await env.DB.batch(stmts);
+  if (stmts.length) await env.DB.batch(stmts);
   return json({ user: publicUser(user) }, 201, { 'set-cookie': await startSession(env, user.id, url) });
 }
