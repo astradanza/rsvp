@@ -13,7 +13,7 @@ Runs entirely on Cloudflare: one Worker (API + static app) and one D1 database.
 - Change your handle from Settings. Old handles keep redirecting to you (pages and referral links don't break) and can't be taken by anyone else.
 - Follow / unfollow. Feed = posts and reposts from people you follow, newest first. No algorithm.
 - Posts and reposts. Members can post; anyone can repost.
-- Nights (promoters and artists): free guestlist or ticket, price, referral commission %, capacity, line-up, color. Publishing a night posts an announcement.
+- Nights (promoters and artists): free guestlist or ticket, price, external ticket link, referral commission %, capacity, line-up (one artist per line; names matching an rsvp.fm handle link to that page), color. Publishing a night posts an announcement. Hosts can edit a night after publishing. The form can be prefilled from the link (`/new/event?title=…&lineup=…`).
 - RSVP in one tap. Share links carry `?ref=handle`; the RSVP records who referred it.
 - Host view on each night: the guestlist, who came through whom, and the commission owed to each referrer.
 - Member view: nights you're going to, people you brought, estimated commission.

@@ -285,7 +285,16 @@
       h += '<div class="facts"><div><span>When</span><b>' + fmtDate(e.starts_at) + '</b><span>' + fmtTime(e.starts_at) + (e.ends_at ? ' → ' + esc(e.ends_at) : '') + '</span></div>' +
         '<div><span>Where</span><b>' + esc(e.venue || 'Secret location') + '</b><span>' + esc(e.city) + '</span></div>' +
         '<div><span>Entry</span><b>' + (e.entry === 'ticket' ? 'Ticket' : 'Free guestlist') + '</b><span>' + priceLabel(e) + (e.capacity ? ' · ' + e.capacity + ' max' : '') + '</span></div>' +
-        '<div><span>Line-up</span><b>' + esc(e.lineup || 'TBA') + '</b></div></div>';
+        '<div><span>Going</span><b>' + e.going + '</b><span>' + (e.friends.length ? e.friends.length + ' you follow' : 'so far') + '</span></div></div>';
+      if (e.is_host) h += '<div class="acts"><a class="pill" href="/e/' + esc(e.id) + '/edit">Edit</a><span class="small">You host this night.</span></div>';
+      if (e.lineup_list && e.lineup_list.length) {
+        h += '<section style="display:flex;flex-direction:column;gap:8px"><h2>Line-up</h2><div>';
+        e.lineup_list.forEach(function (a) {
+          if (a.user) h += '<a class="row" href="/' + esc(a.user.handle) + '" style="padding-block:10px">' + av(a.user, 32) + '<span class="name" style="flex:1">' + esc(a.name) + '</span><span class="small">@' + esc(a.user.handle) + '</span></a>';
+          else h += '<div class="row" style="padding-block:10px"><span style="width:32px;height:32px;border:1px solid var(--line);border-radius:50%;flex-shrink:0"></span><span class="name">' + esc(a.name) + '</span></div>';
+        });
+        h += '</div></section>';
+      }
       if (e.about) h += '<p class="txt">' + esc(e.about) + '</p>';
       h += '<div style="display:flex;align-items:center;gap:10px">';
       if (e.friends.length) { h += '<div class="faces">'; e.friends.forEach(function (f) { h += '<span class="ring">' + av(f, 26) + '</span>'; }); h += '</div>'; }
@@ -298,8 +307,11 @@
         h += '<div><button class="pill" data-act="share" data-id="' + esc(e.id) + '">Copy link</button></div>';
       }
       if (e.is_host) h += '<div id="guests"></div><div><button class="pill ghost" data-act="delevent" data-id="' + esc(e.id) + '">Delete this event</button></div>';
-      h += '</div><div class="buy gut"><div style="display:flex;flex-direction:column"><span style="font-weight:800;font-size:18px">' + priceLabel(e) + '</span><span class="meta">' + (e.entry === 'ticket' ? 'Payment opens soon · reserve your spot' : 'Free guestlist') + '</span></div>' +
-        '<button class="pill big ' + (e.is_going ? 'on' : 'solid') + '" data-act="rsvp" data-id="' + esc(e.id) + '" data-going="' + (e.is_going ? 1 : 0) + '">' + rsvpLabel(e) + '</button></div>';
+      var ext = e.entry === 'ticket' && e.ticket_url;
+      h += '</div><div class="buy gut"><div style="display:flex;flex-direction:column;min-width:0"><span style="font-weight:800;font-size:18px">' + priceLabel(e) + '</span><span class="meta">' + (e.entry === 'ticket' ? (ext ? 'Tickets on the organizer\'s site' : 'Payment opens soon · reserve your spot') : 'Free guestlist') + '</span></div>' +
+        (ext ? '<button class="pill ' + (e.is_going ? 'on' : '') + '" style="margin-left:auto" data-act="rsvp" data-id="' + esc(e.id) + '" data-going="' + (e.is_going ? 1 : 0) + '">' + (e.is_going ? 'Going' : 'I\'m going') + '</button>' +
+          '<a class="pill big solid" style="margin-left:0" href="' + esc(e.ticket_url) + '" target="_blank" rel="noopener">Tickets ↗</a>'
+        : '<button class="pill big ' + (e.is_going ? 'on' : 'solid') + '" data-act="rsvp" data-id="' + esc(e.id) + '" data-going="' + (e.is_going ? 1 : 0) + '">' + rsvpLabel(e) + '</button>') + '</div>';
       main.innerHTML = h;
       if (e.is_host) renderGuests(e, document.getElementById('guests'));
     }).catch(showError);
@@ -338,6 +350,41 @@
     }).join('') + '</div>';
   }
 
+  // Event form, shared by "Announce a night" and "Edit". `v` holds prefilled values.
+  function eventForm(v, editId) {
+    function val(k, d) { return esc(v[k] != null && v[k] !== '' ? v[k] : (d || '')); }
+    var ticket = v.entry === 'ticket';
+    var cur = v.currency || 'EUR';
+    return '<div class="gut section"><form id="f-event"' + (editId ? ' data-id="' + esc(editId) + '"' : '') + '>' +
+      '<div class="field"><label for="title">Name of the night</label><input id="title" name="title" maxlength="80" required placeholder="Cirque Surprise" value="' + val('title') + '"></div>' +
+      '<div class="field"><label for="subtitle">Edition or tagline</label><input id="subtitle" name="subtitle" maxlength="60" placeholder="Vol. 3" value="' + val('subtitle') + '"></div>' +
+      '<div class="two"><div class="field"><label for="starts_at">Starts</label><input id="starts_at" name="starts_at" type="datetime-local" required value="' + val('starts_at').slice(0, 16) + '"></div>' +
+      '<div class="field"><label for="ends_at">Ends</label><input id="ends_at" name="ends_at" maxlength="25" placeholder="02:00" value="' + val('ends_at') + '"></div></div>' +
+      '<div class="two"><div class="field"><label for="venue">Venue</label><input id="venue" name="venue" maxlength="80" placeholder="Secret location" value="' + val('venue') + '"></div>' +
+      '<div class="field"><label for="city">City</label><input id="city" name="city" maxlength="60" placeholder="Paris" value="' + val('city') + '"></div></div>' +
+      '<fieldset><legend class="field">Entry</legend><div class="seg">' +
+      '<label><input type="radio" name="entry" value="guestlist"' + (ticket ? '' : ' checked') + '><span>Free guestlist</span></label>' +
+      '<label><input type="radio" name="entry" value="ticket"' + (ticket ? ' checked' : '') + '><span>Ticket</span></label></div></fieldset>' +
+      '<div id="ticket-fields"' + (ticket ? '' : ' hidden') + ' style="display:flex;flex-direction:column;gap:14px"><div class="two"><div class="field"><label for="price">Price</label><input id="price" name="price" type="number" min="0" step="0.5" inputmode="decimal" placeholder="25" value="' + val('price') + '"></div>' +
+      '<div class="field"><label for="currency">Currency</label><select id="currency" name="currency">' + ['EUR', 'GBP', 'USD', 'MXN'].map(function (c) { return '<option' + (c === cur ? ' selected' : '') + '>' + c + '</option>'; }).join('') + '</select></div></div>' +
+      '<div class="field"><label for="ticket_url">Ticket link (optional, if you already sell elsewhere)</label><input id="ticket_url" name="ticket_url" type="url" inputmode="url" placeholder="https://" value="' + val('ticket_url') + '"></div>' +
+      '<div class="field"><label for="commission_pct">Referral commission (%)</label><input id="commission_pct" name="commission_pct" type="number" min="0" max="50" step="1" placeholder="10" value="' + val('commission_pct') + '"></div></div>' +
+      '<div class="field"><label for="capacity">Capacity (leave empty for no limit)</label><input id="capacity" name="capacity" type="number" min="0" step="1" inputmode="numeric" value="' + (v.capacity ? esc(v.capacity) : '') + '"></div>' +
+      '<div class="field"><label for="lineup">Line-up · one artist per line</label><textarea id="lineup" name="lineup" rows="6" maxlength="1000" placeholder="YokoO&#10;Dj Strangelove&#10;…">' + val('lineup') + '</textarea>' +
+      '<span class="small">Write an rsvp.fm handle (like nojuan) and the name links to their page.</span></div>' +
+      '<div class="field"><label for="about">About</label><textarea id="about" name="about" rows="5" maxlength="2000">' + val('about') + '</textarea></div>' +
+      '<fieldset><legend class="field">Color</legend>' + swatches('color', v.color || me.color) + '</fieldset>' +
+      (editId ? '' : '<div class="field"><label for="announce">Announcement post (optional)</label><textarea id="announce" name="announce" rows="3" maxlength="500" placeholder="Same big top, same hours, nothing else revealed.">' + val('announce') + '</textarea></div>') +
+      '<p class="err" id="err" hidden></p><div class="acts"><button class="pill big solid" type="submit">' + (editId ? 'Save changes' : 'Publish the night') + '</button></div></form></div>';
+  }
+  function wireEventForm() {
+    var form = document.getElementById('f-event');
+    form.addEventListener('change', function () {
+      var t = form.querySelector('input[name=entry]:checked');
+      document.getElementById('ticket-fields').hidden = !t || t.value !== 'ticket';
+    });
+  }
+
   function viewNewEvent() {
     if (!me) return needLogin();
     header({ back: true, title: 'Announce a night' }); setTab('new');
@@ -345,29 +392,26 @@
       main.innerHTML = '<div class="end">Switch your page to Label / Promoter or Artist in <a class="accent" href="/settings">Settings</a> to announce nights.</div>';
       return;
     }
-    main.innerHTML = '<div class="gut section"><form id="f-event">' +
-      '<div class="field"><label for="title">Name of the night</label><input id="title" name="title" maxlength="80" required placeholder="Cirque Surprise"></div>' +
-      '<div class="field"><label for="subtitle">Edition or tagline</label><input id="subtitle" name="subtitle" maxlength="60" placeholder="Vol. 3"></div>' +
-      '<div class="two"><div class="field"><label for="starts_at">Starts</label><input id="starts_at" name="starts_at" type="datetime-local" required></div>' +
-      '<div class="field"><label for="ends_at">Ends</label><input id="ends_at" name="ends_at" maxlength="25" placeholder="02:00"></div></div>' +
-      '<div class="two"><div class="field"><label for="venue">Venue</label><input id="venue" name="venue" maxlength="80" placeholder="Secret location"></div>' +
-      '<div class="field"><label for="city">City</label><input id="city" name="city" maxlength="60" placeholder="Paris"></div></div>' +
-      '<fieldset><legend class="field">Entry</legend><div class="seg">' +
-      '<label><input type="radio" name="entry" value="guestlist" checked><span>Free guestlist</span></label>' +
-      '<label><input type="radio" name="entry" value="ticket"><span>Ticket</span></label></div></fieldset>' +
-      '<div id="ticket-fields" hidden><div class="two"><div class="field"><label for="price">Price</label><input id="price" name="price" type="number" min="0" step="0.5" inputmode="decimal" placeholder="25"></div>' +
-      '<div class="field"><label for="currency">Currency</label><select id="currency" name="currency"><option>EUR</option><option>GBP</option><option>USD</option><option>MXN</option></select></div></div>' +
-      '<div class="field" style="margin-top:14px"><label for="commission_pct">Referral commission (%)</label><input id="commission_pct" name="commission_pct" type="number" min="0" max="50" step="1" placeholder="10"></div></div>' +
-      '<div class="field"><label for="capacity">Capacity (leave empty for no limit)</label><input id="capacity" name="capacity" type="number" min="0" step="1" inputmode="numeric"></div>' +
-      '<div class="field"><label for="lineup">Line-up</label><input id="lineup" name="lineup" maxlength="200" placeholder="Céline · Flabaire · ?"></div>' +
-      '<div class="field"><label for="about">About</label><textarea id="about" name="about" rows="4" maxlength="1000"></textarea></div>' +
-      '<fieldset><legend class="field">Color</legend>' + swatches('color', me.color) + '</fieldset>' +
-      '<div class="field"><label for="announce">Announcement post (optional)</label><textarea id="announce" name="announce" rows="3" maxlength="500" placeholder="Same big top, same hours, nothing else revealed."></textarea></div>' +
-      '<p class="err" id="err" hidden></p><div class="acts"><button class="pill big solid" type="submit">Publish the night</button></div></form></div>';
-    var form = document.getElementById('f-event');
-    form.addEventListener('change', function () {
-      document.getElementById('ticket-fields').hidden = form.entry.value !== 'ticket';
-    });
+    // Any field can be prefilled from the link: /new/event?title=…&lineup=…
+    var q = new URLSearchParams(location.search), v = {};
+    q.forEach(function (val, key) { v[key] = val; });
+    main.innerHTML = eventForm(v, null);
+    wireEventForm();
+  }
+
+  function viewEditEvent(id) {
+    if (!me) return needLogin();
+    header({ back: true, title: 'Edit the night' }); setTab(''); loading();
+    api('GET', '/events/' + encodeURIComponent(id)).then(function (j) {
+      var e = j.event;
+      if (!e.is_host) { main.innerHTML = '<div class="end">Only the host can edit this night.</div>'; return; }
+      var v = {};
+      for (var k in e) v[k] = e[k];
+      v.price = e.price_cents ? String(e.price_cents / 100) : '';
+      v.commission_pct = e.commission_pct || '';
+      main.innerHTML = eventForm(v, e.id);
+      wireEventForm();
+    }).catch(showError);
   }
 
   function viewLogin() {
@@ -552,6 +596,7 @@
     if ((m = /^\/claim\/([A-Za-z0-9_-]+)$/.exec(p))) return viewClaim(m[1]);
     if (p === '/switch') return viewSwitch();
     if (p === '/settings') return viewSettings();
+    if ((m = /^\/e\/([a-z0-9]+)\/edit$/i.exec(p))) return viewEditEvent(m[1]);
     if ((m = /^\/e\/([a-z0-9]+)$/i.exec(p))) return viewEvent(m[1]);
     if ((m = /^\/@?([a-z0-9_]{2,24})$/i.exec(p))) return viewProfile(m[1].toLowerCase());
     header({}); setTab(''); main.innerHTML = '<div class="end">Nothing here.<br><br><a class="pill" href="/">Back home</a></div>';
@@ -650,7 +695,8 @@
     } else if (f.id === 'f-post') {
       api('POST', '/posts', d).then(function () { say('Posted.'); go('/'); }).catch(showErr);
     } else if (f.id === 'f-event') {
-      api('POST', '/events', d).then(function (j) { say('Your night is live.'); go('/e/' + j.id, true); }).catch(showErr);
+      var eid = f.getAttribute('data-id');
+      api(eid ? 'PATCH' : 'POST', eid ? '/events/' + eid : '/events', d).then(function (j) { say(eid ? 'Saved.' : 'Your night is live.'); go('/e/' + j.id, true); }).catch(showErr);
     } else if (f.id === 'f-me') {
       api('PATCH', '/me', d).then(function (j) {
         var renamed = j.user.handle !== me.handle;

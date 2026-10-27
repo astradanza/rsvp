@@ -11,15 +11,19 @@ const ADDED_COLUMNS = [
   ['users', 'avatar', "TEXT NOT NULL DEFAULT ''"],
   ['users', 'banner', "TEXT NOT NULL DEFAULT ''"],
   ['users', 'claim_token', 'TEXT'],
-  ['users', 'account_group', 'INTEGER']
+  ['users', 'account_group', 'INTEGER'],
+  ['events', 'ticket_url', "TEXT NOT NULL DEFAULT ''"]
 ];
 let schemaReady = null;
 function ensureSchema(env) {
   if (!schemaReady) {
     schemaReady = (async () => {
       await env.DB.batch(SCHEMA.map((s) => env.DB.prepare(s)));
-      const cols = new Set((await env.DB.prepare('PRAGMA table_info(users)').all()).results.map((c) => c.name));
-      const missing = ADDED_COLUMNS.filter(([, c]) => !cols.has(c));
+      const cols = {};
+      for (const t of new Set(ADDED_COLUMNS.map(([t]) => t))) {
+        cols[t] = new Set((await env.DB.prepare(`PRAGMA table_info(${t})`).all()).results.map((c) => c.name));
+      }
+      const missing = ADDED_COLUMNS.filter(([t, c]) => !cols[t].has(c));
       if (missing.length) await env.DB.batch(missing.map(([t, c, def]) => env.DB.prepare(`ALTER TABLE ${t} ADD COLUMN ${c} ${def}`)));
       await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS users_invite_link ON users(invite_link)').run();
       await env.DB.prepare('CREATE INDEX IF NOT EXISTS users_invited_by ON users(invited_by)').run();
@@ -193,6 +197,7 @@ function eventShape(e) {
     id: e.id, title: e.title, subtitle: e.subtitle, starts_at: e.starts_at, ends_at: e.ends_at,
     venue: e.venue, city: e.city, entry: e.entry, price_cents: e.price_cents, currency: e.currency,
     commission_pct: e.commission_pct, capacity: e.capacity, lineup: e.lineup, about: e.about, color: e.color,
+    ticket_url: e.ticket_url || '',
     going: e.going || 0,
     host: { handle: e.host_handle, name: e.host_name, color: e.host_color, kind: e.host_kind, avatar: e.host_avatar || '' }
   };
@@ -241,6 +246,36 @@ async function hydratePosts(env, rows, me) {
     i_reposted: mine.has(r.id),
     mine: !!me && me.id === r.author_id
   }));
+}
+
+// Validate an event form (create and edit share it).
+function eventFields(b, fallbackColor) {
+  const title = str(b.title, 80);
+  const starts = str(b.starts_at, 25);
+  if (!title) fail(400, 'Give the night a name.');
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(starts)) fail(400, 'Pick a start date and time.');
+  const entry = b.entry === 'ticket' ? 'ticket' : 'guestlist';
+  const ticketUrl = str(b.ticket_url, 300);
+  if (ticketUrl && !/^https:\/\/[^\s]+$/.test(ticketUrl)) fail(400, 'The ticket link must start with https://');
+  return {
+    title, subtitle: str(b.subtitle, 60), starts_at: starts, ends_at: str(b.ends_at, 25),
+    venue: str(b.venue, 80), city: str(b.city, 60), entry,
+    price_cents: entry === 'ticket' ? Math.max(0, Math.round(Number(b.price) * 100) || 0) : 0,
+    currency: ['EUR', 'GBP', 'USD', 'MXN'].includes(b.currency) ? b.currency : 'EUR',
+    commission_pct: entry === 'ticket' ? Math.min(50, Math.max(0, Math.round(Number(b.commission_pct) || 0))) : 0,
+    capacity: Math.max(0, Math.round(Number(b.capacity) || 0)),
+    lineup: (typeof b.lineup === 'string' ? b.lineup : '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).join('\n').slice(0, 1000),
+    about: str(b.about, 2000),
+    color: COLOR_RE.test(b.color || '') ? b.color : fallbackColor,
+    ticket_url: entry === 'ticket' ? ticketUrl : ''
+  };
+}
+// Line-up text: one artist per line (older events used " · " or commas on one line).
+function lineupNames(text) {
+  const t = String(text || '').trim();
+  if (!t) return [];
+  const parts = t.includes('\n') ? t.split(/\n/) : t.split(/\s*[·,]\s*/);
+  return parts.map((s) => s.trim()).filter(Boolean).slice(0, 60);
 }
 
 async function userByHandle(env, handle) {
@@ -628,25 +663,15 @@ async function api(request, env, url) {
     requireUser(me);
     if (me.kind === 'member' && !me.is_admin) fail(403, 'Switch your page to Label / Promoter or Artist in Settings to create events.');
     const b = await body(request);
-    const title = str(b.title, 80);
-    const starts = str(b.starts_at, 25);
-    if (!title) fail(400, 'Give the night a name.');
-    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(starts)) fail(400, 'Pick a start date and time.');
-    const entry = b.entry === 'ticket' ? 'ticket' : 'guestlist';
-    const price = entry === 'ticket' ? Math.max(0, Math.round(Number(b.price) * 100) || 0) : 0;
-    const commission = entry === 'ticket' ? Math.min(50, Math.max(0, Math.round(Number(b.commission_pct) || 0))) : 0;
-    const currency = ['EUR', 'GBP', 'USD', 'MXN'].includes(b.currency) ? b.currency : 'EUR';
-    const color = COLOR_RE.test(b.color || '') ? b.color : me.color;
+    const f = eventFields(b, me.color);
     const id = randomCode(8);
     await env.DB.prepare(
-      `INSERT INTO events (id, host_id, title, subtitle, starts_at, ends_at, venue, city, entry, price_cents, currency, commission_pct, capacity, lineup, about, color)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      id, me.id, title, str(b.subtitle, 60), starts, str(b.ends_at, 25), str(b.venue, 80), str(b.city, 60),
-      entry, price, currency, commission, Math.max(0, Math.round(Number(b.capacity) || 0)),
-      str(b.lineup, 200), str(b.about, 1000), color
-    ).run();
-    const announce = str(b.announce, 500) || `${title}${b.subtitle ? ' — ' + str(b.subtitle, 60) : ''}. RSVP is open.`;
+      `INSERT INTO events (id, host_id, title, subtitle, starts_at, ends_at, venue, city, entry, price_cents, currency, commission_pct, capacity, lineup, about, color, ticket_url)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, me.id, f.title, f.subtitle, f.starts_at, f.ends_at, f.venue, f.city, f.entry, f.price_cents, f.currency,
+      f.commission_pct, f.capacity, f.lineup, f.about, f.color, f.ticket_url).run();
+    const title = f.title;
+    const announce = str(b.announce, 500) || `${title}${f.subtitle ? ' — ' + f.subtitle : ''}. RSVP is open.`;
     await env.DB.prepare('INSERT INTO posts (author_id, text, event_id) VALUES (?, ?, ?)').bind(me.id, announce, id).run();
     return json({ id }, 201);
   }
@@ -658,6 +683,14 @@ async function api(request, env, url) {
     if (seg.length === 2 && method === 'GET') {
       const out = eventShape(ev);
       out.is_host = isHost;
+      // Line-up as a list; names that match a page on rsvp.fm link to it.
+      const names = lineupNames(ev.lineup);
+      const cands = names.map((n) => n.toLowerCase().replace(/^@/, '').replace(/[^a-z0-9_]/g, ''));
+      const found = cands.filter(Boolean).length
+        ? (await env.DB.prepare(`SELECT * FROM users WHERE handle IN (${placeholders(cands.filter(Boolean).length)})`).bind(...cands.filter(Boolean)).all()).results
+        : [];
+      const byHandle = Object.fromEntries(found.map((u) => [u.handle.toLowerCase(), publicUser(u)]));
+      out.lineup_list = names.map((n, i) => ({ name: n.replace(/^@/, ''), user: byHandle[cands[i]] || null }));
       if (me) {
         out.is_going = !!(await env.DB.prepare('SELECT 1 FROM rsvps WHERE event_id = ? AND user_id = ?').bind(ev.id, me.id).first());
         out.friends = (await env.DB.prepare(
@@ -666,6 +699,16 @@ async function api(request, env, url) {
         ).bind(ev.id, me.id).all()).results.map(publicUser);
       } else out.friends = [];
       return json({ event: out });
+    }
+    if (seg.length === 2 && method === 'PATCH') {
+      if (!isHost) fail(403, 'Only the host can edit this event.');
+      const f = eventFields(await body(request), ev.color);
+      await env.DB.prepare(
+        `UPDATE events SET title = ?, subtitle = ?, starts_at = ?, ends_at = ?, venue = ?, city = ?, entry = ?, price_cents = ?, currency = ?,
+         commission_pct = ?, capacity = ?, lineup = ?, about = ?, color = ?, ticket_url = ? WHERE id = ?`
+      ).bind(f.title, f.subtitle, f.starts_at, f.ends_at, f.venue, f.city, f.entry, f.price_cents, f.currency,
+        f.commission_pct, f.capacity, f.lineup, f.about, f.color, f.ticket_url, ev.id).run();
+      return json({ id: ev.id });
     }
     if (seg.length === 2 && method === 'DELETE') {
       if (!isHost) fail(403, 'Only the host can delete this event.');
