@@ -680,5 +680,9 @@
       me = j.user; needsInvite = j.needs_invite !== false;
     });
   }
-  boot().catch(function () {}).then(route);
+  // Never stay stuck on "Loading…": give the session check 8 seconds, then render anyway.
+  var started = false;
+  function start() { if (!started) { started = true; route(); } }
+  setTimeout(start, 8000);
+  boot().catch(function () {}).then(start);
 })();
