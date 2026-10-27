@@ -2,6 +2,9 @@
 (function () {
   'use strict';
 
+  // Money features (ticket sales, referral commissions, amounts owed) are built but hidden at launch.
+  // Flip to true the day ticketing opens.
+  var MONEY = false;
   var me = null;          // logged-in user or null
   var needsInvite = true; // false only before the very first account exists
   var main = document.getElementById('main');
@@ -149,8 +152,8 @@
   function viewWelcome() {
     header({}); setTab('');
     main.innerHTML = '<section class="hero gut"><span class="label">Invite only</span>' +
-      '<h1>The guestlist for people who make nights happen.</h1>' +
-      '<p>Promoters, artists and the people who dance with them. Follow who you trust, RSVP in one tap, share your link and get rewarded when friends come along.</p>' +
+      '<h1>Updates from artists &amp; labels.</h1>' +
+      '<p>Follow the artists, labels and promoters you love, and hear from them directly: new records, new nights, nothing else. No ads, no algorithm, in the order they post. RSVP in one tap.</p>' +
       '<div class="acts" style="flex-wrap:wrap"><a class="pill big solid" href="/signup">I have an invite</a><a class="pill big" href="/login">Log in</a></div></section>' +
       '<div class="sep"></div><div id="disc"></div>';
     renderDiscover(document.getElementById('disc'));
@@ -264,8 +267,10 @@
   function renderMine(el) {
     Promise.all([api('GET', '/me/referrals'), api('GET', '/me/nights')]).then(function (r) {
       var ref = r[0], nights = r[1].events, h = '<div class="gut" style="padding-block:0 16px;display:flex;flex-direction:column;gap:16px">';
-      h += '<section class="box" style="border-color:var(--fg)"><span class="label">Referrals</span><span style="font-size:28px;font-weight:800">' + money(ref.total_cents, 'EUR') + '</span>' +
+      if (MONEY) h += '<section class="box" style="border-color:var(--fg)"><span class="label">Referrals</span><span style="font-size:28px;font-weight:800">' + money(ref.total_cents, 'EUR') + '</span>' +
         '<span class="small">' + ref.total_referred + ' people came through your links' + (ref.total_cents ? ' · estimated, paid by hosts' : '') + '</span></section>';
+      else if (ref.total_referred) h += '<section class="box"><span class="label">Your links</span><span style="font-size:28px;font-weight:800">' + ref.total_referred + '</span>' +
+        '<span class="small">' + (ref.total_referred === 1 ? 'person' : 'people') + ' RSVP\'d through links you shared</span></section>';
       h += '<section style="display:flex;flex-direction:column;gap:4px"><h2>Your nights</h2>';
       if (nights.length) nights.forEach(function (e) { h += evRow(e, fmtDate(e.starts_at) + ' · ' + (e.city || e.venue)); });
       else h += '<p class="small" style="margin:0">Nothing yet. RSVP from your feed.</p>';
@@ -299,7 +304,7 @@
       h += '<div style="display:flex;align-items:center;gap:10px">';
       if (e.friends.length) { h += '<div class="faces">'; e.friends.forEach(function (f) { h += '<span class="ring">' + av(f, 26) + '</span>'; }); h += '</div>'; }
       h += '<span class="small"' + (e.friends.length ? ' style="margin-left:8px"' : '') + '>' + e.going + ' going' + (e.friends.length ? ' · ' + e.friends.map(function (f) { return esc(f.name); }).join(', ') : '') + '</span></div>';
-      if (me && e.entry === 'ticket' && e.commission_pct) {
+      if (MONEY && me && e.entry === 'ticket' && e.commission_pct) {
         h += '<section class="ref"><span style="font-weight:700;font-size:15px">Earn ' + e.commission_pct + '% on every ticket sold through your link</span>' +
           '<span class="small" style="overflow-wrap:anywhere">' + esc(shareLink(e.id).replace(/^https?:\/\//, '')) + '</span>' +
           '<button class="pill" style="align-self:flex-start" data-act="share" data-id="' + esc(e.id) + '">Copy my link</button></section>';
@@ -308,10 +313,10 @@
       }
       if (e.is_host) h += '<div id="guests"></div><div><button class="pill ghost" data-act="delevent" data-id="' + esc(e.id) + '">Delete this event</button></div>';
       var ext = e.entry === 'ticket' && e.ticket_url;
-      h += '</div><div class="buy gut"><div style="display:flex;flex-direction:column;min-width:0"><span style="font-weight:800;font-size:18px">' + priceLabel(e) + '</span><span class="meta">' + (e.entry === 'ticket' ? (ext ? 'Tickets on the organizer\'s site' : 'Payment opens soon · reserve your spot') : 'Free guestlist') + '</span></div>' +
+      h += '</div><div class="buy gut"><div style="display:flex;flex-direction:column;min-width:0"><span style="font-weight:800;font-size:18px">' + priceLabel(e) + '</span><span class="meta">' + (e.entry === 'ticket' ? (ext ? 'Tickets on the organizer\'s site' : (MONEY ? 'Payment opens soon · reserve your spot' : 'Tickets announced soon')) : 'Free guestlist') + '</span></div>' +
         (ext ? '<button class="pill ' + (e.is_going ? 'on' : '') + '" style="margin-left:auto" data-act="rsvp" data-id="' + esc(e.id) + '" data-going="' + (e.is_going ? 1 : 0) + '">' + (e.is_going ? 'Going' : 'I\'m going') + '</button>' +
           '<a class="pill big solid" style="margin-left:0" href="' + esc(e.ticket_url) + '" target="_blank" rel="noopener">Tickets ↗</a>'
-        : '<button class="pill big ' + (e.is_going ? 'on' : 'solid') + '" data-act="rsvp" data-id="' + esc(e.id) + '" data-going="' + (e.is_going ? 1 : 0) + '">' + rsvpLabel(e) + '</button>') + '</div>';
+        : '<button class="pill big ' + (e.is_going ? 'on' : 'solid') + '" data-act="rsvp" data-id="' + esc(e.id) + '" data-going="' + (e.is_going ? 1 : 0) + '">' + (MONEY ? rsvpLabel(e) : (e.is_going ? (e.entry === 'ticket' ? 'Going' : 'On the list') : (e.entry === 'ticket' ? 'I\'m going' : 'RSVP'))) + '</button>') + '</div>';
       main.innerHTML = h;
       if (e.is_host) renderGuests(e, document.getElementById('guests'));
     }).catch(showError);
@@ -320,8 +325,9 @@
     api('GET', '/events/' + e.id + '/guests').then(function (j) {
       var h = '<section class="box"><span class="label">Host view · guestlist (' + j.guests.length + ')</span>';
       if (j.referrers.length) {
-        h += '<table><thead><tr><th>Referrer</th><th class="n">Guests</th>' + (e.entry === 'ticket' ? '<th class="n">Owed</th>' : '') + '</tr></thead><tbody>';
-        j.referrers.forEach(function (r) { h += '<tr><td><a href="/' + esc(r.handle) + '">@' + esc(r.handle) + '</a></td><td class="n">' + r.referred + '</td>' + (e.entry === 'ticket' ? '<td class="n">' + money(r.owed_cents, e.currency) + '</td>' : '') + '</tr>'; });
+        var owed = MONEY && e.entry === 'ticket';
+        h += '<table><thead><tr><th>Brought by</th><th class="n">Guests</th>' + (owed ? '<th class="n">Owed</th>' : '') + '</tr></thead><tbody>';
+        j.referrers.forEach(function (r) { h += '<tr><td><a href="/' + esc(r.handle) + '">@' + esc(r.handle) + '</a></td><td class="n">' + r.referred + '</td>' + (owed ? '<td class="n">' + money(r.owed_cents, e.currency) + '</td>' : '') + '</tr>'; });
         h += '</tbody></table>';
       }
       h += '<table><thead><tr><th>Guest</th><th>Via</th></tr></thead><tbody>';
@@ -368,7 +374,7 @@
       '<div id="ticket-fields"' + (ticket ? '' : ' hidden') + ' style="display:flex;flex-direction:column;gap:14px"><div class="two"><div class="field"><label for="price">Price</label><input id="price" name="price" type="number" min="0" step="0.5" inputmode="decimal" placeholder="25" value="' + val('price') + '"></div>' +
       '<div class="field"><label for="currency">Currency</label><select id="currency" name="currency">' + ['EUR', 'GBP', 'USD', 'MXN'].map(function (c) { return '<option' + (c === cur ? ' selected' : '') + '>' + c + '</option>'; }).join('') + '</select></div></div>' +
       '<div class="field"><label for="ticket_url">Ticket link (optional, if you already sell elsewhere)</label><input id="ticket_url" name="ticket_url" type="url" inputmode="url" placeholder="https://" value="' + val('ticket_url') + '"></div>' +
-      '<div class="field"><label for="commission_pct">Referral commission (%)</label><input id="commission_pct" name="commission_pct" type="number" min="0" max="50" step="1" placeholder="10" value="' + val('commission_pct') + '"></div></div>' +
+      (MONEY ? '' : '<input type="hidden" name="commission_pct" value="' + val('commission_pct') + '">') + (!MONEY ? '' : '<div class="field"><label for="commission_pct">Referral commission (%)</label><input id="commission_pct" name="commission_pct" type="number" min="0" max="50" step="1" placeholder="10" value="' + val('commission_pct') + '"></div>') + '</div>' +
       '<div class="field"><label for="capacity">Capacity (leave empty for no limit)</label><input id="capacity" name="capacity" type="number" min="0" step="1" inputmode="numeric" value="' + (v.capacity ? esc(v.capacity) : '') + '"></div>' +
       '<div class="field"><label for="lineup">Line-up · one artist per line</label><textarea id="lineup" name="lineup" rows="6" maxlength="1000" placeholder="YokoO&#10;Dj Strangelove&#10;…">' + val('lineup') + '</textarea>' +
       '<span class="small">Write an rsvp.fm handle (like nojuan) and the name links to their page.</span></div>' +

@@ -1,6 +1,8 @@
 # rsvp.fm
 
-A curated home for promoters, artists and the people who dance with them.
+Updates from artists & labels: a clean, curated channel to follow the artists, labels and promoters you love. No ads, no algorithm, free.
+
+Money features (ticket sales, referral commissions, amounts owed to referrers) are built but hidden at launch: set `MONEY = true` at the top of `public/app.js` to show them.
 Pages at `rsvp.fm/handle`, a chronological feed, a curated Discover tab, nights with free guestlist or tickets, reposts, and referral links that credit whoever brought a guest.
 
 Runs entirely on Cloudflare: one Worker (API + static app) and one D1 database.
