@@ -526,7 +526,7 @@ async function api(request, env, url) {
   // --- events ---
   if (path === '/api/events' && method === 'POST') {
     requireUser(me);
-    if (me.kind === 'member' && !me.is_admin) fail(403, 'Switch your page to promoter or artist in Settings to create events.');
+    if (me.kind === 'member' && !me.is_admin) fail(403, 'Switch your page to Label / Promoter or Artist in Settings to create events.');
     const b = await body(request);
     const title = str(b.title, 80);
     const starts = str(b.starts_at, 25);

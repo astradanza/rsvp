@@ -9,6 +9,9 @@
   var PALETTE = ['#E23B2E', '#2F55D4', '#E8A80C', '#1E8C6E', '#9B59D0', '#D23C7A', '#1FA4B4', '#F2EFE6'];
 
   // ---------- helpers ----------
+  // Page types: stored as member / artist / promoter, shown as Guest / Artist / Label / Promoter.
+  var KINDS = { member: 'Guest', artist: 'Artist', promoter: 'Label / Promoter' };
+  function kindLabel(k) { return KINDS[k] || k; }
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -178,7 +181,7 @@
         h += '<div class="picks gut">';
         j.picks.forEach(function (u) {
           h += '<div class="pick"><a href="/' + esc(u.handle) + '" style="display:flex;flex-direction:column;gap:10px">' + av(u, 52) +
-            '<span class="name">' + esc(u.name) + '</span><span class="meta">' + esc(u.kind) + (u.city ? ' · ' + esc(u.city) : '') + '</span></a>' + (me ? followBtn(u, false) : '') + '</div>';
+            '<span class="name">' + esc(u.name) + '</span><span class="meta">' + esc(kindLabel(u.kind)) + (u.city ? ' · ' + esc(u.city) : '') + '</span></a>' + (me ? followBtn(u, false) : '') + '</div>';
         });
         h += '</div>';
       } else h += '<p class="small gut" style="margin:0 0 16px">' + (me ? 'You follow everyone in this week\'s selection.' : 'The selection opens soon.') + '</p>';
@@ -209,7 +212,7 @@
         (j.is_me ? '<a class="pill" href="/settings">Edit page</a>' : (me ? followBtn(u, j.is_following) : '<a class="pill solid" href="/login?next=/' + esc(u.handle) + '">Follow</a>')) + '</div>';
       h += '<div><h1>' + esc(u.name) + '</h1><div class="mono accent" style="font-size:12px;margin-top:2px">rsvp.fm/' + esc(u.handle) + (u.ambassador ? ' · AMBASSADOR' : '') + '</div></div>';
       if (u.bio) h += '<p class="txt" style="font-size:14px">' + esc(u.bio) + '</p>';
-      h += '<div class="stats"><span><strong>' + j.followers + '</strong> followers</span><span><strong>' + j.following + '</strong> following</span><span>' + esc(u.kind) + (u.city ? ' · ' + esc(u.city) : '') + '</span></div></div>';
+      h += '<div class="stats"><span><strong>' + j.followers + '</strong> followers</span><span><strong>' + j.following + '</strong> following</span><span>' + esc(kindLabel(u.kind)) + (u.city ? ' · ' + esc(u.city) : '') + '</span></div></div>';
       if (j.is_me) h += '<div id="mine"></div>';
       if (j.events.length) {
         h += '<section class="gut section sep"><h2>Upcoming</h2><div>';
@@ -320,7 +323,7 @@
       '<p class="err" id="err" hidden></p><div class="acts"><button class="pill big on" type="submit">Post</button></div></form>' +
       '<p class="small">Your posts appear in your followers\' feeds in order. No algorithm.</p>';
     if (me.kind !== 'member') h += '<div class="sep" style="padding-top:16px"><a class="pill" href="/new/event">Announce a night instead</a></div>';
-    else h += '<p class="small sep" style="padding-top:16px;margin:0">Promoter or artist? Switch your page type in <a class="accent" href="/settings">Settings</a> to announce nights.</p>';
+    else h += '<p class="small sep" style="padding-top:16px;margin:0">Label, promoter or artist? Switch your page type in <a class="accent" href="/settings">Settings</a> to announce nights.</p>';
     main.innerHTML = h + '</div>';
     document.getElementById('text').focus();
   }
@@ -335,7 +338,7 @@
     if (!me) return needLogin();
     header({ back: true, title: 'Announce a night' }); setTab('new');
     if (me.kind === 'member' && !me.is_admin) {
-      main.innerHTML = '<div class="end">Switch your page to promoter or artist in <a class="accent" href="/settings">Settings</a> to announce nights.</div>';
+      main.innerHTML = '<div class="end">Switch your page to Label / Promoter or Artist in <a class="accent" href="/settings">Settings</a> to announce nights.</div>';
       return;
     }
     main.innerHTML = '<div class="gut section"><form id="f-event">' +
@@ -383,9 +386,9 @@
       '<div class="field"><label for="handle">Handle</label><input id="handle" name="handle" autocapitalize="none" pattern="[a-z0-9_]{2,24}" maxlength="24" required placeholder="astradanza"><span class="small">rsvp.fm/<span id="hprev">handle</span></span></div>' +
       '<div class="field"><label for="name">Display name</label><input id="name" name="name" maxlength="60" required></div>' +
       '<fieldset><legend class="field">I am</legend><div class="seg">' +
-      '<label><input type="radio" name="kind" value="member" checked><span>Member</span></label>' +
+      '<label><input type="radio" name="kind" value="member" checked><span>Guest</span></label>' +
       '<label><input type="radio" name="kind" value="artist"><span>Artist</span></label>' +
-      '<label><input type="radio" name="kind" value="promoter"><span>Promoter</span></label></div></fieldset>' +
+      '<label><input type="radio" name="kind" value="promoter"><span>Label / Promoter</span></label></div></fieldset>' +
       '<div class="field"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required></div>' +
       '<div class="field"><label for="password">Password</label><input id="password" name="password" type="password" minlength="8" autocomplete="new-password" required></div>' +
       '<p class="err" id="err" hidden></p><button class="pill big solid" type="submit">Create my page</button></form></div>';
@@ -431,7 +434,7 @@
       '<div class="field"><label for="bio">Bio</label><textarea id="bio" name="bio" rows="3" maxlength="280">' + esc(me.bio) + '</textarea></div>' +
       '<div class="field"><label for="city">City</label><input id="city" name="city" maxlength="60" value="' + esc(me.city) + '"></div>' +
       '<fieldset><legend class="field">Page type</legend><div class="seg">' +
-      ['member', 'artist', 'promoter'].map(function (k) { return '<label><input type="radio" name="kind" value="' + k + '"' + (me.kind === k ? ' checked' : '') + '><span>' + k.charAt(0).toUpperCase() + k.slice(1) + '</span></label>'; }).join('') +
+      ['member', 'artist', 'promoter'].map(function (k) { return '<label><input type="radio" name="kind" value="' + k + '"' + (me.kind === k ? ' checked' : '') + '><span>' + kindLabel(k) + '</span></label>'; }).join('') +
       '</div></fieldset><fieldset><legend class="field">Page color</legend>' + swatches('color', me.color) + '</fieldset>' +
       '<p class="err" id="err" hidden></p><button class="pill big solid" type="submit">Save</button></form></div>' +
       '<div class="gut section sep" id="invites"><h2>Your invite link</h2><p class="small" style="margin:0">Loading…</p></div>';
@@ -446,9 +449,9 @@
         '<div class="field"><label for="aname">Display name</label><input id="aname" name="name" maxlength="60" required placeholder="Astradanza"></div></div>' +
         '<div class="field"><label for="aemail">Email</label><input id="aemail" name="email" type="email" autocomplete="off" required></div>' +
         '<fieldset><legend class="field">Page type</legend><div class="seg">' +
-        '<label><input type="radio" name="kind" value="promoter" checked><span>Promoter</span></label>' +
+        '<label><input type="radio" name="kind" value="promoter" checked><span>Label / Promoter</span></label>' +
         '<label><input type="radio" name="kind" value="artist"><span>Artist</span></label>' +
-        '<label><input type="radio" name="kind" value="member"><span>Member</span></label></div></fieldset>' +
+        '<label><input type="radio" name="kind" value="member"><span>Guest</span></label></div></fieldset>' +
         '<div class="field"><label for="apass">Password (optional)</label><input id="apass" name="password" type="password" autocomplete="new-password" minlength="8"></div>' +
         '<p class="err" id="err-account" hidden></p><button class="pill big solid" type="submit">Create the page</button></form><div id="account-out"></div></div>';
     }
