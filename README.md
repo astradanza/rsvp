@@ -11,13 +11,13 @@ Runs entirely on Cloudflare: one Worker (API + static app) and one D1 database.
 
 - Invite-only sign-up. The very first account needs no invite and becomes the admin. Every member has one personal invite link (`rsvp.fm/i/code`) good for 10 sign-ups, sees who joined through it and how many are left, and can replace it if it leaks.
 - Ambassadors: admins see members running low on invites (2 or fewer left) on their feed and in Settings, and can make them ambassadors (50 invites) or top them up by 10.
-- Pages `rsvp.fm/handle` with color, bio, city, follower counts, Top 8, upcoming nights, posts, and a public wall: any member can write on it, the author or the page owner can delete.
+- Pages `rsvp.fm/handle` with color, bio, city, Top 8, upcoming nights, posts, and a public wall: any member can write on it, the author or the page owner can delete.
 - Change your handle from Settings. Old handles keep redirecting to you (pages and referral links don't break) and can't be taken by anyone else.
 - Follow / unfollow. Feed = posts and reposts from people you follow, newest first. No algorithm.
 - Posts and reposts. Members can post; anyone can repost.
-- Nights (promoters and artists): free guestlist or ticket, price, external ticket link, referral commission %, capacity, line-up (one artist per line; names matching an rsvp.fm handle link to that page), color. Publishing a night posts an announcement. Hosts can edit a night after publishing. The form can be prefilled from the link (`/new/event?title=…&lineup=…`).
-- RSVP in one tap. Share links carry `?ref=handle`; the RSVP records who referred it.
-- Host view on each night: the guestlist, who came through whom, and the commission owed to each referrer.
+- Events (labels, promoters, artists): an image, a caption, an optional date. Public (announced to followers, listed on the page and in Discover) or private (only reachable with the guestlist link). Each event has a guestlist link `rsvp.fm/e/id?k=…`; members join in one tap. Optionally, people without an account can request a spot (name, email, note) and the host accepts or declines. No counters anywhere: no follower counts, no "going" counts.
+- Share links carry `?ref=handle`; the guestlist records who brought whom.
+- Host view on each event: the guestlist link, requests to accept or decline, and the guestlist with who brought whom.
 - Member view: nights you're going to, people you brought, estimated commission.
 - Admin: unlimited invite link, single-use codes, feature pages in Discover.
 - Anyone can create a page (a label, a party series, an artist project, or a page for a partner). Each page uses one invite. Pages you create are linked to your account; switch between linked accounts from your page, like on Instagram. You can also link an existing account by logging in to it once. A page made for someone else gets an activation link (`rsvp.fm/claim/…`); once activated it leaves your accounts.

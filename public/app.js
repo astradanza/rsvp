@@ -72,7 +72,8 @@
     var dt = new Date(t); return dt.getDate() + ' ' + MONTHS[dt.getMonth()];
   }
   function priceLabel(e) { return e.entry === 'ticket' ? (e.price_cents ? money(e.price_cents, e.currency) : 'Free ticket') : 'Free · RSVP'; }
-  function rsvpLabel(e) { return e.is_going ? (e.entry === 'ticket' ? 'Going' : 'On the list') : (e.entry === 'ticket' ? 'Get ticket' : 'RSVP'); }
+  function rsvpLabel(e) { return e.is_going ? 'On the list' : 'Join the guestlist'; }
+  function rsvpLabelOld(e) { return e.is_going ? (e.entry === 'ticket' ? 'Going' : 'On the list') : (e.entry === 'ticket' ? 'Get ticket' : 'RSVP'); }
   function shareLink(id) { return location.origin + '/e/' + id + (me ? '?ref=' + me.handle : ''); }
   function copy(text) {
     var done = function () { say('Link copied · ' + text.replace(/^https?:\/\//, '')); };
@@ -95,14 +96,16 @@
     }
     return '<span class="av" style="width:' + size + 'px;height:' + size + 'px;font-size:' + Math.round(size * 0.4) + 'px;background:' + esc(c) + ';color:' + fgFor(c) + '">' + esc((u.name || u.handle || '?').charAt(0).toUpperCase()) + '</span>';
   }
+  // An event's picture: the uploaded image, or a plain block with the first line of the caption.
   function cover(e, h, big) {
-    var s = big ? [220, -50, -60, 70, 24, 28, 40] : [150, -30, -40, 46, 20, 20, 26];
-    return '<div class="cover" style="height:' + h + 'px;background:' + esc(e.color) + '">' +
-      '<div class="c1" style="width:' + s[0] + 'px;height:' + s[0] + 'px;right:' + s[1] + 'px;top:' + s[2] + 'px"></div>' +
-      '<div class="c2" style="width:' + s[3] + 'px;height:' + s[3] + 'px;left:' + s[4] + 'px;top:' + s[5] + 'px"></div>' +
-      '<div class="t" style="color:' + fgFor(e.color) + '"><div class="t1" style="font-size:' + s[6] + 'px">' + esc(e.title) + '</div>' +
-      (e.subtitle ? '<div class="t2">' + esc(e.subtitle) + '</div>' : '') + '</div></div>';
+    if (e.image && /^\/api\/img\//.test(e.image)) {
+      return '<img src="' + esc(e.image) + '" alt="" loading="lazy" style="display:block;width:100%;max-height:' + (big ? 560 : 420) + 'px;object-fit:cover;background:var(--surface)">';
+    }
+    var first = (e.caption || e.title || '').split('\n')[0];
+    return '<div class="cover" style="height:' + h + 'px;background:var(--surface);border-bottom:1px solid var(--line)">' +
+      '<div class="t" style="color:var(--fg)"><div class="t1" style="font-size:' + (big ? 30 : 22) + 'px">' + esc(first) + '</div></div></div>';
   }
+  function whenLine(e) { return e.starts_at ? fmtDate(e.starts_at) + ' · ' + fmtTime(e.starts_at) : ''; }
   function postHtml(p) {
     var a = p.author, e = p.event, h = '<article class="post gut">';
     if (p.reposted_by) h += '<div class="rp">' + I.rep.replace(/20/g, '14') + '<span>' + esc(p.reposted_by.name) + ' reposted</span></div>';
@@ -110,19 +113,18 @@
     h += '<p class="txt">' + esc(p.text) + '</p>';
     if (e) {
       h += '<a class="card" href="/e/' + esc(e.id) + '">' + cover(e, 150, false) +
-        '<div class="cardfoot"><span>' + fmtDate(e.starts_at) + (e.city ? ' · ' + esc(e.city) : '') + '</span><span style="color:var(--fg)">' + priceLabel(e) + '</span></div></a>';
+        (e.starts_at ? '<div class="cardfoot"><span>' + whenLine(e) + '</span></div>' : '') + '</a>';
     }
     h += '<div class="acts">';
     if (e) h += '<button class="pill' + (e.is_going ? ' on' : '') + '" data-act="rsvp" data-id="' + esc(e.id) + '" data-going="' + (e.is_going ? 1 : 0) + '">' + rsvpLabel(e) + '</button>';
-    if (!p.mine) h += '<button class="ico' + (p.i_reposted ? ' on' : '') + '" aria-label="Repost" data-act="repost" data-id="' + p.id + '" data-on="' + (p.i_reposted ? 1 : 0) + '">' + I.rep + (p.reposts ? '<span>' + p.reposts + '</span>' : '') + '</button>';
-    else if (p.reposts) h += '<span class="ico">' + I.rep + '<span>' + p.reposts + '</span></span>';
-    if (e) h += '<button class="ico" aria-label="Copy your referral link" data-act="share" data-id="' + esc(e.id) + '">' + I.share + '</button><span class="going">' + e.going + ' going</span>';
+    if (!p.mine) h += '<button class="ico' + (p.i_reposted ? ' on' : '') + '" aria-label="Repost" data-act="repost" data-id="' + p.id + '" data-on="' + (p.i_reposted ? 1 : 0) + '">' + I.rep + '</button>';
+    if (e) h += '<button class="ico" aria-label="Copy your referral link" data-act="share" data-id="' + esc(e.id) + '">' + I.share + '</button>';
     if (p.mine && !p.reposted_by) h += '<button class="ico" style="margin-left:' + (e ? '0' : 'auto') + '" data-act="delpost" data-id="' + p.id + '">Delete</button>';
     return h + '</div></article>';
   }
   function evRow(e, line) {
-    return '<a class="row" href="/e/' + esc(e.id) + '"><span class="date" style="background:' + esc(e.color) + ';color:' + fgFor(e.color) + '">' + dateTile(e.starts_at) + '</span>' +
-      '<span style="display:flex;flex-direction:column;gap:2px;min-width:0"><span style="font-weight:700;font-size:16px">' + esc(e.title) + ' <span class="muted" style="font-weight:400">' + esc(e.subtitle) + '</span></span>' +
+    return '<a class="row" href="/e/' + esc(e.id) + '"><span class="date" style="background:' + esc(e.color) + ';color:' + fgFor(e.color) + '">' + (e.starts_at ? dateTile(e.starts_at) : '·') + '</span>' +
+      '<span style="display:flex;flex-direction:column;gap:2px;min-width:0"><span class="name" style="font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc((e.caption || e.title).split('\n')[0]) + '</span>' +
       '<span class="meta">' + esc(line) + '</span></span></a>';
   }
   function followBtn(u, on) {
@@ -189,7 +191,7 @@
         h += '</div>';
       } else h += '<p class="small gut" style="margin:0 0 16px">' + (me ? 'You follow everyone in this week\'s selection.' : 'The selection opens soon.') + '</p>';
       h += '<section class="gut section sep"><h2>Upcoming</h2><div>';
-      j.events.forEach(function (e) { h += evRow(e, (e.city ? e.city + ' · ' : '') + priceLabel(e) + ' · ' + e.going + ' going'); });
+      j.events.forEach(function (e) { h += evRow(e, '@' + e.host.handle + (e.starts_at ? ' · ' + whenLine(e) : '')); });
       if (!j.events.length) h += '<p class="small">No nights announced yet.</p>';
       h += '</div></section>';
       if (j.newcomers.length) {
@@ -219,14 +221,14 @@
         (j.is_me ? '<a class="pill" href="/settings">Edit page</a>' : (me ? followBtn(u, j.is_following) : '<a class="pill solid" href="/login?next=/' + esc(u.handle) + '">Follow</a>')) + '</div>';
       h += '<div><h1>' + esc(u.name) + '</h1><div class="mono muted" style="font-size:12px;margin-top:4px">rsvp.fm/' + esc(u.handle) + (u.ambassador ? ' · AMBASSADOR' : '') + '</div></div>';
       if (u.bio) h += '<p class="txt" style="font-size:14px">' + esc(u.bio) + '</p>';
-      h += '<div class="stats"><span><strong>' + j.followers + '</strong> followers</span><span><strong>' + j.following + '</strong> following</span><span>' + esc(kindLabel(u.kind)) + (u.city ? ' · ' + esc(u.city) : '') + '</span></div></div>';
+      h += '<div class="stats"><span>' + esc(kindLabel(u.kind)) + (u.city ? ' · ' + esc(u.city) : '') + '</span></div></div>';
       if (j.is_me) h += '<div id="mine"></div>';
       if (j.events.length) {
         h += '<section class="gut section sep"><h2>Upcoming</h2><div>';
-        j.events.forEach(function (e) { h += evRow(e, fmtDate(e.starts_at) + (e.venue ? ' · ' + e.venue : '') + ' · ' + priceLabel(e)); });
+        j.events.forEach(function (e) { h += evRow(e, (e.visibility === 'private' ? 'Private · ' : '') + (whenLine(e) || 'No date')); });
         h += '</div></section>';
       }
-      if (j.is_me && u.kind !== 'member') h += '<div class="gut" style="padding-block:0 16px"><a class="pill" href="/new/event">Announce a night</a></div>';
+      if (j.is_me && u.kind !== 'member') h += '<div class="gut" style="padding-block:0 16px"><a class="pill" href="/new/event">New event</a></div>';
       if (j.top8.length) {
         h += '<section class="gut section sep"><h2>Top 8</h2><div class="grid4">';
         j.top8.forEach(function (f) { h += '<a class="g" href="/' + esc(f.handle) + '">' + av(f, 56) + '<span>' + esc(f.name) + '</span></a>'; });
@@ -272,7 +274,7 @@
       else if (ref.total_referred) h += '<section class="box"><span class="label">Your links</span><span style="font-size:28px;font-weight:800">' + ref.total_referred + '</span>' +
         '<span class="small">' + (ref.total_referred === 1 ? 'person' : 'people') + ' RSVP\'d through links you shared</span></section>';
       h += '<section style="display:flex;flex-direction:column;gap:4px"><h2>Your nights</h2>';
-      if (nights.length) nights.forEach(function (e) { h += evRow(e, fmtDate(e.starts_at) + ' · ' + (e.city || e.venue)); });
+      if (nights.length) nights.forEach(function (e) { h += evRow(e, '@' + e.host.handle + (e.starts_at ? ' · ' + whenLine(e) : '')); });
       else h += '<p class="small" style="margin:0">Nothing yet. RSVP from your feed.</p>';
       el.innerHTML = h + '</section></div>';
     }).catch(function () { el.innerHTML = ''; });
@@ -281,59 +283,75 @@
   function viewEvent(id) {
     header({ back: true, title: '' }); setTab(''); loading();
     var q = new URLSearchParams(location.search);
-    if (q.get('ref')) { try { sessionStorage.setItem('ref:' + id, q.get('ref')); } catch (e) {} }
-    api('GET', '/events/' + encodeURIComponent(id)).then(function (j) {
+    try {
+      if (q.get('ref')) sessionStorage.setItem('ref:' + id, q.get('ref'));
+      if (q.get('k')) sessionStorage.setItem('k:' + id, q.get('k'));
+    } catch (e) {}
+    var k = q.get('k') || ''; try { k = k || sessionStorage.getItem('k:' + id) || ''; } catch (e) {}
+    api('GET', '/events/' + encodeURIComponent(id) + (k ? '?k=' + encodeURIComponent(k) : '')).then(function (j) {
       var e = j.event, h = '';
-      header({ back: true, title: e.title + (e.subtitle ? ' ' + e.subtitle : '') });
-      h += cover(e, 260, true) + '<div class="gut" style="display:flex;flex-direction:column;gap:16px;padding-block:16px">';
-      h += '<a class="who" href="/' + esc(e.host.handle) + '">' + av(e.host, 32) + '<span style="font-size:14px">Hosted by <strong>' + esc(e.host.name) + '</strong></span></a>';
-      h += '<div class="facts"><div><span>When</span><b>' + fmtDate(e.starts_at) + '</b><span>' + fmtTime(e.starts_at) + (e.ends_at ? ' → ' + esc(e.ends_at) : '') + '</span></div>' +
-        '<div><span>Where</span><b>' + esc(e.venue || 'Secret location') + '</b><span>' + esc(e.city) + '</span></div>' +
-        '<div><span>Entry</span><b>' + (e.entry === 'ticket' ? 'Ticket' : 'Free guestlist') + '</b><span>' + priceLabel(e) + (e.capacity ? ' · ' + e.capacity + ' max' : '') + '</span></div>' +
-        '<div><span>Going</span><b>' + e.going + '</b><span>' + (e.friends.length ? e.friends.length + ' you follow' : 'so far') + '</span></div></div>';
-      if (e.is_host) h += '<div class="acts"><a class="pill" href="/e/' + esc(e.id) + '/edit">Edit</a><span class="small">You host this night.</span></div>';
-      if (e.lineup_list && e.lineup_list.length) {
-        h += '<section style="display:flex;flex-direction:column;gap:8px"><h2>Line-up</h2><div>';
-        e.lineup_list.forEach(function (a) {
-          if (a.user) h += '<a class="row" href="/' + esc(a.user.handle) + '" style="padding-block:10px">' + av(a.user, 32) + '<span class="name" style="flex:1">' + esc(a.name) + '</span><span class="small">@' + esc(a.user.handle) + '</span></a>';
-          else h += '<div class="row" style="padding-block:10px"><span style="width:32px;height:32px;border:1px solid var(--line);border-radius:50%;flex-shrink:0"></span><span class="name">' + esc(a.name) + '</span></div>';
-        });
-        h += '</div></section>';
-      }
-      if (e.about) h += '<p class="txt">' + esc(e.about) + '</p>';
-      h += '<div style="display:flex;align-items:center;gap:10px">';
-      if (e.friends.length) { h += '<div class="faces">'; e.friends.forEach(function (f) { h += '<span class="ring">' + av(f, 26) + '</span>'; }); h += '</div>'; }
-      h += '<span class="small"' + (e.friends.length ? ' style="margin-left:8px"' : '') + '>' + e.going + ' going' + (e.friends.length ? ' · ' + e.friends.map(function (f) { return esc(f.name); }).join(', ') : '') + '</span></div>';
-      if (MONEY && me && e.entry === 'ticket' && e.commission_pct) {
-        h += '<section class="ref"><span style="font-weight:700;font-size:15px">Earn ' + e.commission_pct + '% on every ticket sold through your link</span>' +
-          '<span class="small" style="overflow-wrap:anywhere">' + esc(shareLink(e.id).replace(/^https?:\/\//, '')) + '</span>' +
-          '<button class="pill" style="align-self:flex-start" data-act="share" data-id="' + esc(e.id) + '">Copy my link</button></section>';
+      header({ back: true, title: (e.caption || e.title).split('\n')[0] });
+      h += (e.image ? cover(e, 220, true) : '') + '<div class="gut" style="display:flex;flex-direction:column;gap:16px;padding-block:16px">';
+      h += '<a class="who" href="/' + esc(e.host.handle) + '">' + av(e.host, 32) + '<span style="min-width:0"><span class="name">' + esc(e.host.name) + '</span><span class="meta">@' + esc(e.host.handle) +
+        (e.visibility === 'private' ? ' · private' : '') + '</span></span></a>';
+      if (e.starts_at) h += '<div class="mono" style="font-size:13px">' + whenLine(e) + '</div>';
+      h += '<p class="txt">' + esc(e.caption) + '</p>';
+      if (e.friends.length) h += '<div style="display:flex;align-items:center;gap:10px"><div class="faces">' + e.friends.map(function (f) { return '<span class="ring">' + av(f, 26) + '</span>'; }).join('') +
+        '</div><span class="small" style="margin-left:8px">' + e.friends.map(function (f) { return esc(f.name); }).join(', ') + ' ' + (e.friends.length > 1 ? 'are' : 'is') + ' on the list</span></div>';
+
+      // Joining: members in one tap; people without an account can ask, if the host allows it.
+      if (me) {
+        h += '<div class="acts"><button class="pill big ' + (e.is_going ? 'on' : 'solid') + '" data-act="rsvp" data-id="' + esc(e.id) + '" data-going="' + (e.is_going ? 1 : 0) + '">' + rsvpLabel(e) + '</button>' +
+          (e.visibility === 'public' ? '<button class="ico" aria-label="Copy link" data-act="share" data-id="' + esc(e.id) + '">' + I.share + '</button>' : '') + '</div>';
+      } else if (e.allow_requests) {
+        h += '<section class="box"><h2>Request the guestlist</h2><p class="small" style="margin:0">No account needed. The host will confirm.</p>' +
+          '<form id="f-request" data-id="' + esc(e.id) + '" data-k="' + esc(k) + '">' +
+          '<div class="field"><label for="rq-name">Name</label><input id="rq-name" name="name" maxlength="80" autocomplete="name" required></div>' +
+          '<div class="field"><label for="rq-email">Email</label><input id="rq-email" name="email" type="email" autocomplete="email" required></div>' +
+          '<div class="field"><label for="rq-note">Note for the host (optional)</label><input id="rq-note" name="note" maxlength="300" placeholder="+1, who you know…"></div>' +
+          '<p class="err" id="err" hidden></p><button class="pill big solid" type="submit">Send my request</button></form>' +
+          '<p class="small" style="margin:0">Already a member? <a class="accent" href="/login?next=' + encodeURIComponent(location.pathname + location.search) + '">Log in</a></p></section>';
       } else {
-        h += '<div><button class="pill" data-act="share" data-id="' + esc(e.id) + '">Copy link</button></div>';
+        h += '<div class="acts"><a class="pill big solid" href="/login?next=' + encodeURIComponent(location.pathname + location.search) + '">Log in to join the guestlist</a></div>';
       }
-      if (e.is_host) h += '<div id="guests"></div><div><button class="pill ghost" data-act="delevent" data-id="' + esc(e.id) + '">Delete this event</button></div>';
-      var ext = e.entry === 'ticket' && e.ticket_url;
-      h += '</div><div class="buy gut"><div style="display:flex;flex-direction:column;min-width:0"><span style="font-weight:800;font-size:18px">' + priceLabel(e) + '</span><span class="meta">' + (e.entry === 'ticket' ? (ext ? 'Tickets on the organizer\'s site' : (MONEY ? 'Payment opens soon · reserve your spot' : 'Tickets announced soon')) : 'Free guestlist') + '</span></div>' +
-        (ext ? '<button class="pill ' + (e.is_going ? 'on' : '') + '" style="margin-left:auto" data-act="rsvp" data-id="' + esc(e.id) + '" data-going="' + (e.is_going ? 1 : 0) + '">' + (e.is_going ? 'Going' : 'I\'m going') + '</button>' +
-          '<a class="pill big solid" style="margin-left:0" href="' + esc(e.ticket_url) + '" target="_blank" rel="noopener">Tickets ↗</a>'
-        : '<button class="pill big ' + (e.is_going ? 'on' : 'solid') + '" data-act="rsvp" data-id="' + esc(e.id) + '" data-going="' + (e.is_going ? 1 : 0) + '">' + (MONEY ? rsvpLabel(e) : (e.is_going ? (e.entry === 'ticket' ? 'Going' : 'On the list') : (e.entry === 'ticket' ? 'I\'m going' : 'RSVP'))) + '</button>') + '</div>';
-      main.innerHTML = h;
+
+      if (e.is_host) {
+        var link = location.origin + '/e/' + e.id + '?k=' + e.gl_token;
+        h += '<section class="box"><span class="label">Your guestlist link</span>' +
+          '<span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(link.replace(/^https?:\/\//, '')) + '</span>' +
+          '<span class="small">' + (e.visibility === 'private' ? 'Private event: only people with this link can see it and join.' : 'Public event: anyone can see it; this link also works.') +
+          (e.allow_requests ? ' People without an account can request a spot.' : '') + '</span>' +
+          '<div class="acts" style="flex-wrap:wrap"><button class="pill solid" data-act="copylink" data-id="' + esc(link) + '">Copy link</button><a class="pill" href="/e/' + esc(e.id) + '/edit">Edit</a>' +
+          '<button class="pill ghost" data-act="delevent" data-id="' + esc(e.id) + '">Delete</button></div></section><div id="guests"></div>';
+      }
+      main.innerHTML = h + '</div>';
       if (e.is_host) renderGuests(e, document.getElementById('guests'));
     }).catch(showError);
   }
   function renderGuests(e, el) {
     api('GET', '/events/' + e.id + '/guests').then(function (j) {
-      var h = '<section class="box"><span class="label">Host view · guestlist (' + j.guests.length + ')</span>';
-      if (j.referrers.length) {
-        var owed = MONEY && e.entry === 'ticket';
-        h += '<table><thead><tr><th>Brought by</th><th class="n">Guests</th>' + (owed ? '<th class="n">Owed</th>' : '') + '</tr></thead><tbody>';
-        j.referrers.forEach(function (r) { h += '<tr><td><a href="/' + esc(r.handle) + '">@' + esc(r.handle) + '</a></td><td class="n">' + r.referred + '</td>' + (owed ? '<td class="n">' + money(r.owed_cents, e.currency) + '</td>' : '') + '</tr>'; });
-        h += '</tbody></table>';
+      var pending = j.requests.filter(function (r) { return r.status === 'pending'; });
+      var approved = j.requests.filter(function (r) { return r.status === 'approved'; });
+      var h = '';
+      if (pending.length) {
+        h += '<section class="box"><span class="label">Requests</span>';
+        pending.forEach(function (r) {
+          h += '<div class="row" style="align-items:flex-start;gap:10px"><span style="flex:1;min-width:0"><span class="name">' + esc(r.name) + '</span><span class="meta" style="overflow-wrap:anywhere">' + esc(r.email) + '</span>' +
+            (r.note ? '<span class="small" style="display:block">' + esc(r.note) + '</span>' : '') + '</span>' +
+            '<button class="pill solid" data-act="approve" data-id="' + r.id + '" data-ev="' + esc(e.id) + '">Accept</button>' +
+            '<button class="pill ghost" data-act="decline" data-id="' + r.id + '" data-ev="' + esc(e.id) + '">Decline</button></div>';
+        });
+        h += '</section>';
       }
-      h += '<table><thead><tr><th>Guest</th><th>Via</th></tr></thead><tbody>';
-      j.guests.forEach(function (g) { h += '<tr><td><a href="/' + esc(g.handle) + '">' + esc(g.name) + '</a></td><td class="muted">' + (g.ref_handle ? '@' + esc(g.ref_handle) : '—') + '</td></tr>'; });
-      if (!j.guests.length) h += '<tr><td colspan="2" class="muted">No one yet.</td></tr>';
-      el.innerHTML = h + '</tbody></table></section>';
+      h += '<section class="box"><span class="label">Guestlist</span>';
+      j.guests.forEach(function (g) {
+        h += '<a class="row" href="/' + esc(g.handle) + '">' + av(g, 28) + '<span class="name" style="flex:1">' + esc(g.name) + '</span><span class="small">' + (g.ref_handle ? 'via @' + esc(g.ref_handle) : '@' + esc(g.handle)) + '</span></a>';
+      });
+      approved.forEach(function (r) {
+        h += '<div class="row"><span style="width:28px;height:28px;border:1px solid var(--line);border-radius:50%;flex-shrink:0"></span><span class="name" style="flex:1">' + esc(r.name) + '</span><span class="small" style="overflow-wrap:anywhere">' + esc(r.email) + '</span></div>';
+      });
+      if (!j.guests.length && !approved.length) h += '<p class="small" style="margin:0">No one yet. Share your link.</p>';
+      el.innerHTML = h + '</section>';
     }).catch(function () { el.innerHTML = ''; });
   }
 
@@ -344,7 +362,7 @@
       '<textarea id="text" name="text" rows="6" maxlength="500" placeholder="What\'s on tonight?" required></textarea></div>' +
       '<p class="err" id="err" hidden></p><div class="acts"><button class="pill big solid" type="submit">Post</button></div></form>' +
       '<p class="small">Your posts appear in your followers\' feeds in order. No algorithm.</p>';
-    if (me.kind !== 'member') h += '<div class="sep" style="padding-top:16px"><a class="pill" href="/new/event">Announce a night instead</a></div>';
+    if (me.kind !== 'member') h += '<div class="sep" style="padding-top:16px"><a class="pill" href="/new/event">Create an event instead</a></div>';
     else h += '<p class="small sep" style="padding-top:16px;margin:0">Label, promoter or artist? Switch your page type in <a class="accent" href="/settings">Settings</a> to announce nights.</p>';
     main.innerHTML = h + '</div>';
     document.getElementById('text').focus();
@@ -356,67 +374,46 @@
     }).join('') + '</div>';
   }
 
-  // Event form, shared by "Announce a night" and "Edit". `v` holds prefilled values.
+  // Event form: an image, a caption, an optional date, public or private, requests on or off.
   function eventForm(v, editId) {
-    function val(k, d) { return esc(v[k] != null && v[k] !== '' ? v[k] : (d || '')); }
-    var ticket = v.entry === 'ticket';
-    var cur = v.currency || 'EUR';
+    var priv = v.visibility === 'private';
     return '<div class="gut section"><form id="f-event"' + (editId ? ' data-id="' + esc(editId) + '"' : '') + '>' +
-      '<div class="field"><label for="title">Name of the night</label><input id="title" name="title" maxlength="80" required placeholder="Cirque Surprise" value="' + val('title') + '"></div>' +
-      '<div class="field"><label for="subtitle">Edition or tagline</label><input id="subtitle" name="subtitle" maxlength="60" placeholder="Vol. 3" value="' + val('subtitle') + '"></div>' +
-      '<div class="two"><div class="field"><label for="starts_at">Starts</label><input id="starts_at" name="starts_at" type="datetime-local" required value="' + val('starts_at').slice(0, 16) + '"></div>' +
-      '<div class="field"><label for="ends_at">Ends</label><input id="ends_at" name="ends_at" maxlength="25" placeholder="02:00" value="' + val('ends_at') + '"></div></div>' +
-      '<div class="two"><div class="field"><label for="venue">Venue</label><input id="venue" name="venue" maxlength="80" placeholder="Secret location" value="' + val('venue') + '"></div>' +
-      '<div class="field"><label for="city">City</label><input id="city" name="city" maxlength="60" placeholder="Paris" value="' + val('city') + '"></div></div>' +
-      '<fieldset><legend class="field">Entry</legend><div class="seg">' +
-      '<label><input type="radio" name="entry" value="guestlist"' + (ticket ? '' : ' checked') + '><span>Free guestlist</span></label>' +
-      '<label><input type="radio" name="entry" value="ticket"' + (ticket ? ' checked' : '') + '><span>Ticket</span></label></div></fieldset>' +
-      '<div id="ticket-fields"' + (ticket ? '' : ' hidden') + ' style="display:flex;flex-direction:column;gap:14px"><div class="two"><div class="field"><label for="price">Price</label><input id="price" name="price" type="number" min="0" step="0.5" inputmode="decimal" placeholder="25" value="' + val('price') + '"></div>' +
-      '<div class="field"><label for="currency">Currency</label><select id="currency" name="currency">' + ['EUR', 'GBP', 'USD', 'MXN'].map(function (c) { return '<option' + (c === cur ? ' selected' : '') + '>' + c + '</option>'; }).join('') + '</select></div></div>' +
-      '<div class="field"><label for="ticket_url">Ticket link (optional, if you already sell elsewhere)</label><input id="ticket_url" name="ticket_url" type="url" inputmode="url" placeholder="https://" value="' + val('ticket_url') + '"></div>' +
-      (MONEY ? '' : '<input type="hidden" name="commission_pct" value="' + val('commission_pct') + '">') + (!MONEY ? '' : '<div class="field"><label for="commission_pct">Referral commission (%)</label><input id="commission_pct" name="commission_pct" type="number" min="0" max="50" step="1" placeholder="10" value="' + val('commission_pct') + '"></div>') + '</div>' +
-      '<div class="field"><label for="capacity">Capacity (leave empty for no limit)</label><input id="capacity" name="capacity" type="number" min="0" step="1" inputmode="numeric" value="' + (v.capacity ? esc(v.capacity) : '') + '"></div>' +
-      '<div class="field"><label for="lineup">Line-up · one artist per line</label><textarea id="lineup" name="lineup" rows="6" maxlength="1000" placeholder="YokoO&#10;Dj Strangelove&#10;…">' + val('lineup') + '</textarea>' +
-      '<span class="small">Write an rsvp.fm handle (like nojuan) and the name links to their page.</span></div>' +
-      '<div class="field"><label for="about">About</label><textarea id="about" name="about" rows="5" maxlength="2000">' + val('about') + '</textarea></div>' +
-      '<fieldset><legend class="field">Color</legend>' + swatches('color', v.color || me.color) + '</fieldset>' +
-      (editId ? '' : '<div class="field"><label for="announce">Announcement post (optional)</label><textarea id="announce" name="announce" rows="3" maxlength="500" placeholder="Same big top, same hours, nothing else revealed.">' + val('announce') + '</textarea></div>') +
-      '<p class="err" id="err" hidden></p><div class="acts"><button class="pill big solid" type="submit">' + (editId ? 'Save changes' : 'Publish the night') + '</button></div></form></div>';
+      '<div class="field"><span class="label">Image</span><div id="ev-img" style="border:1px solid var(--line);border-radius:var(--r);overflow:hidden">' +
+      (v.image ? '<img src="' + esc(v.image) + '" alt="" style="display:block;width:100%;max-height:420px;object-fit:cover">' : '<div class="small" style="padding:28px 14px;text-align:center">No image yet</div>') + '</div>' +
+      '<input type="hidden" name="image" value="' + esc(v.image || '') + '">' +
+      '<div class="acts"><label class="pill" for="up-event" style="cursor:pointer">' + (v.image ? 'Replace image' : 'Upload an image') + '</label>' +
+      '<input id="up-event" type="file" accept="image/*" data-kind="event" hidden>' +
+      (v.image ? '<button class="pill ghost" type="button" data-act="rmevimg">Remove</button>' : '') + '</div></div>' +
+      '<div class="field"><label for="caption">Caption</label><textarea id="caption" name="caption" rows="8" maxlength="2000" required placeholder="Name of the night, where, who plays, anything you want to say.">' + esc(v.caption || '') + '</textarea></div>' +
+      '<div class="field"><label for="starts_at">Date (optional)</label><input id="starts_at" name="starts_at" type="datetime-local" value="' + esc((v.starts_at || '').slice(0, 16)) + '"></div>' +
+      '<fieldset><legend class="field">Who can see it</legend><div class="seg">' +
+      '<label><input type="radio" name="visibility" value="public"' + (priv ? '' : ' checked') + '><span>Public</span></label>' +
+      '<label><input type="radio" name="visibility" value="private"' + (priv ? ' checked' : '') + '><span>Private · link only</span></label></div></fieldset>' +
+      '<label class="small" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer"><input type="checkbox" name="allow_requests" value="1"' + (v.allow_requests ? ' checked' : '') + ' style="width:auto;margin-top:2px">' +
+      '<span>Let people without an account request a spot (name and email). You accept or decline each request.</span></label>' +
+      '<p class="err" id="err" hidden></p><div class="acts"><button class="pill big solid" type="submit">' + (editId ? 'Save' : 'Publish') + '</button></div></form></div>';
   }
-  function wireEventForm() {
-    var form = document.getElementById('f-event');
-    form.addEventListener('change', function () {
-      var t = form.querySelector('input[name=entry]:checked');
-      document.getElementById('ticket-fields').hidden = !t || t.value !== 'ticket';
-    });
-  }
+  function wireEventForm() {}
 
   function viewNewEvent() {
     if (!me) return needLogin();
-    header({ back: true, title: 'Announce a night' }); setTab('new');
+    header({ back: true, title: 'New event' }); setTab('new');
     if (me.kind === 'member' && !me.is_admin) {
-      main.innerHTML = '<div class="end">Switch your page to Label / Promoter or Artist in <a class="accent" href="/settings">Settings</a> to announce nights.</div>';
+      main.innerHTML = '<div class="end">Switch your page to Label / Promoter or Artist in <a class="accent" href="/settings">Settings</a> to create events.</div>';
       return;
     }
-    // Any field can be prefilled from the link: /new/event?title=…&lineup=…
     var q = new URLSearchParams(location.search), v = {};
     q.forEach(function (val, key) { v[key] = val; });
     main.innerHTML = eventForm(v, null);
-    wireEventForm();
   }
 
   function viewEditEvent(id) {
     if (!me) return needLogin();
-    header({ back: true, title: 'Edit the night' }); setTab(''); loading();
+    header({ back: true, title: 'Edit event' }); setTab(''); loading();
     api('GET', '/events/' + encodeURIComponent(id)).then(function (j) {
       var e = j.event;
-      if (!e.is_host) { main.innerHTML = '<div class="end">Only the host can edit this night.</div>'; return; }
-      var v = {};
-      for (var k in e) v[k] = e[k];
-      v.price = e.price_cents ? String(e.price_cents / 100) : '';
-      v.commission_pct = e.commission_pct || '';
-      main.innerHTML = eventForm(v, e.id);
-      wireEventForm();
+      if (!e.is_host) { main.innerHTML = '<div class="end">Only the host can edit this event.</div>'; return; }
+      main.innerHTML = eventForm(e, e.id);
     }).catch(showError);
   }
 
@@ -620,6 +617,7 @@
     if (act === 'share') return copy(shareLink(id));
     if (act === 'copyinvite') return copy(inviteUrl(id));
     if (act === 'copyclaim') return copy(location.origin + '/claim/' + id);
+    if (act === 'copylink') return copy(id);
     if (!me) return needLogin();
     b.disabled = true;
     var done = function () { b.disabled = false; };
@@ -632,7 +630,8 @@
     } else if (act === 'rsvp') {
       var going = b.getAttribute('data-going') === '1', ref = null;
       try { ref = sessionStorage.getItem('ref:' + id); } catch (e) {}
-      api(going ? 'DELETE' : 'POST', '/events/' + id + '/rsvp', going ? undefined : { ref: ref }).then(function () {
+      var gk = ''; try { gk = sessionStorage.getItem('k:' + id) || ''; } catch (e) {}
+      api(going ? 'DELETE' : 'POST', '/events/' + id + '/rsvp', going ? undefined : { ref: ref, k: gk }).then(function () {
         say(going ? 'Cancelled.' : 'You\'re on the list.'); route();
       }).catch(function (e) { say(e.message); done(); });
     } else if (act === 'repost') {
@@ -655,6 +654,13 @@
     } else if (act === 'unlink') {
       if (b.getAttribute('data-confirm') !== '1') { b.setAttribute('data-confirm', '1'); b.textContent = 'Tap again: you will need to log in to switch back'; return done(); }
       api('POST', '/accounts/unlink', {}).then(function () { say('Removed from the group.'); viewSwitch(); }).catch(function (e) { say(e.message); done(); });
+    } else if (act === 'approve' || act === 'decline') {
+      api('POST', '/events/' + b.getAttribute('data-ev') + '/requests/' + id, { status: act === 'approve' ? 'approved' : 'declined' }).then(function () {
+        say(act === 'approve' ? 'Added to the guestlist.' : 'Declined.'); route();
+      }).catch(function (e) { say(e.message); done(); });
+    } else if (act === 'rmevimg') {
+      var f0 = document.getElementById('f-event'); f0.image.value = '';
+      document.getElementById('ev-img').innerHTML = '<div class="small" style="padding:28px 14px;text-align:center">No image yet</div>'; b.remove();
     } else if (act === 'rmbanner') {
       api('PATCH', '/me', { banner: '' }).then(function (j) { for (var k in j.user) me[k] = j.user[k]; say('Header removed.'); viewSettings(); }).catch(function (e) { say(e.message); done(); });
     } else if (act === 'regeninvite') {
@@ -716,6 +722,11 @@
         document.getElementById('admin-out').innerHTML = '<p class="small">New codes: ' + j.codes.map(esc).join(' · ') + '</p>';
         if (btn) btn.disabled = false;
       }).catch(showErr);
+    } else if (f.id === 'f-request') {
+      d.k = f.getAttribute('data-k') || '';
+      api('POST', '/events/' + f.getAttribute('data-id') + '/request', d).then(function (j) {
+        f.outerHTML = '<p class="txt">' + (j.already ? 'You already asked. ' : 'Request sent. ') + 'The host will confirm.</p>';
+      }).catch(showErr);
     } else if (f.id === 'f-link') {
       api('POST', '/accounts/link', d).then(boot).then(function () { say('Account added. Now on @' + me.handle); go('/' + me.handle, true); }).catch(showErr);
     } else if (f.id === 'f-claim') {
@@ -759,11 +770,38 @@
       img.src = url;
     });
   }
+  // Event images keep their shape (posters, square, portrait): longest side at most `max` px.
+  function prepareImageFit(file, max) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file), img = new Image();
+      img.onload = function () {
+        var scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+        var w = Math.round(img.naturalWidth * scale), h = Math.round(img.naturalHeight * scale);
+        var c = document.createElement('canvas'); c.width = w; c.height = h;
+        c.getContext('2d').drawImage(img, 0, 0, w, h);
+        URL.revokeObjectURL(url);
+        resolve(c.toDataURL('image/jpeg', 0.85));
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('This file could not be read as an image. Try a JPEG or PNG.')); };
+      img.src = url;
+    });
+  }
   document.addEventListener('change', function (ev) {
     var input = ev.target;
     if (!input.matches || !input.matches('input[type=file][data-kind]') || !input.files || !input.files[0]) return;
     var kind = input.getAttribute('data-kind');
     say('Uploading…');
+    if (kind === 'event') {
+      prepareImageFit(input.files[0], 1600)
+        .then(function (data) { return api('POST', '/images', { data: data }); })
+        .then(function (j) {
+          var form = document.getElementById('f-event'); form.image.value = j.url;
+          document.getElementById('ev-img').innerHTML = '<img src="' + esc(j.url) + '" alt="" style="display:block;width:100%;max-height:420px;object-fit:cover">';
+          say('Image ready.');
+        })
+        .catch(function (e) { say(e.message); input.value = ''; });
+      return;
+    }
     prepareImage(input.files[0], kind === 'banner' ? 1500 : 400, kind === 'banner' ? 500 : 400)
       .then(function (data) { return api('POST', '/me/image', { kind: kind, data: data }); })
       .then(function (j) {

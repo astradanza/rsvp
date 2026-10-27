@@ -12,7 +12,12 @@ const ADDED_COLUMNS = [
   ['users', 'banner', "TEXT NOT NULL DEFAULT ''"],
   ['users', 'claim_token', 'TEXT'],
   ['users', 'account_group', 'INTEGER'],
-  ['events', 'ticket_url', "TEXT NOT NULL DEFAULT ''"]
+  ['events', 'ticket_url', "TEXT NOT NULL DEFAULT ''"],
+  ['events', 'image', "TEXT NOT NULL DEFAULT ''"],
+  ['events', 'caption', "TEXT NOT NULL DEFAULT ''"],
+  ['events', 'visibility', "TEXT NOT NULL DEFAULT 'public'"],
+  ['events', 'allow_requests', 'INTEGER NOT NULL DEFAULT 0'],
+  ['events', 'gl_token', "TEXT NOT NULL DEFAULT ''"]
 ];
 let schemaReady = null;
 function ensureSchema(env) {
@@ -34,6 +39,12 @@ function ensureSchema(env) {
           author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           text TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
         env.DB.prepare('CREATE INDEX IF NOT EXISTS wall_owner ON wall(owner_id, created_at)'),
+        // Guestlist requests from people without an account (migrations/0008_simple_events.sql)
+        env.DB.prepare(`CREATE TABLE IF NOT EXISTS guest_requests (id INTEGER PRIMARY KEY AUTOINCREMENT,
+          event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+          name TEXT NOT NULL, email TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
+        env.DB.prepare('CREATE INDEX IF NOT EXISTS guest_requests_event ON guest_requests(event_id, status)'),
         // Old handles keep redirecting to their owner after a rename (migrations/0006_handle_history.sql)
         env.DB.prepare(`CREATE TABLE IF NOT EXISTS handle_history (handle TEXT PRIMARY KEY COLLATE NOCASE,
           user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -192,25 +203,35 @@ async function inviteStats(env, u) {
   const quota = u.invite_quota == null ? DEFAULT_QUOTA : u.invite_quota;
   return { used, quota, unlimited, remaining: unlimited ? null : Math.max(0, quota - used) };
 }
+// Events are an image and a caption. Older events (title, venue, line-up…) get a caption built from their fields.
+function captionOf(e) {
+  if (e.caption) return e.caption;
+  const head = [e.title, e.subtitle].filter(Boolean).join(' — ');
+  const where = [e.venue, e.city].filter(Boolean).join(', ');
+  return [head, where, e.about, e.lineup ? 'Line-up:\n' + e.lineup : ''].filter(Boolean).join('\n\n');
+}
 function eventShape(e) {
   return {
     id: e.id, title: e.title, subtitle: e.subtitle, starts_at: e.starts_at, ends_at: e.ends_at,
     venue: e.venue, city: e.city, entry: e.entry, price_cents: e.price_cents, currency: e.currency,
     commission_pct: e.commission_pct, capacity: e.capacity, lineup: e.lineup, about: e.about, color: e.color,
     ticket_url: e.ticket_url || '',
-    going: e.going || 0,
+    image: e.image || '', caption: captionOf(e), visibility: e.visibility || 'public', allow_requests: !!e.allow_requests,
     host: { handle: e.host_handle, name: e.host_name, color: e.host_color, kind: e.host_kind, avatar: e.host_avatar || '' }
   };
 }
 const EVENT_SELECT = `SELECT e.*, u.handle AS host_handle, u.name AS host_name, u.color AS host_color, u.kind AS host_kind, u.avatar AS host_avatar,
   (SELECT COUNT(*) FROM rsvps r WHERE r.event_id = e.id) AS going
   FROM events e JOIN users u ON u.id = e.host_id`;
+// Upcoming = dated in the future (or last 12 hours), or undated and posted in the last 30 days.
+const UPCOMING = `(e.starts_at >= strftime('%Y-%m-%dT%H:%M', 'now', '-12 hours') OR (e.starts_at = '' AND e.created_at >= datetime('now', '-30 days')))`;
+const UPCOMING_ORDER = `CASE WHEN e.starts_at = '' THEN 1 ELSE 0 END, e.starts_at, e.created_at DESC`;
 
 async function eventsByIds(env, ids, me) {
   if (!ids.length) return {};
   const rows = (await env.DB.prepare(`${EVENT_SELECT} WHERE e.id IN (${placeholders(ids.length)})`).bind(...ids).all()).results;
   const out = {};
-  for (const r of rows) out[r.id] = eventShape(r);
+  for (const r of rows) if (r.visibility !== 'private' || (me && me.id === r.host_id)) out[r.id] = eventShape(r);
   if (me) {
     const mine = (await env.DB.prepare(
       `SELECT event_id FROM rsvps WHERE user_id = ? AND event_id IN (${placeholders(ids.length)})`
@@ -246,6 +267,25 @@ async function hydratePosts(env, rows, me) {
     i_reposted: mine.has(r.id),
     mine: !!me && me.id === r.author_id
   }));
+}
+
+// The simple event form: an image, a caption, an optional date, public or private, requests on or off.
+async function simpleEventFields(env, me, b) {
+  const caption = (typeof b.caption === 'string' ? b.caption : '').replace(/\r\n/g, '\n').trim().slice(0, 2000);
+  if (!caption) fail(400, 'Write a caption.');
+  const starts = str(b.starts_at, 25);
+  if (starts && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(starts)) fail(400, 'Pick a valid date and time, or leave it empty.');
+  let image = str(b.image, 80);
+  if (image) {
+    const m = /^\/api\/img\/([a-z0-9]+)$/.exec(image);
+    if (!m || !(await env.DB.prepare('SELECT 1 FROM images WHERE id = ? AND owner_id = ?').bind(m[1], me.id).first())) image = '';
+  }
+  return {
+    caption, image, starts_at: starts ? starts.slice(0, 16) : '',
+    title: caption.split('\n')[0].slice(0, 80),
+    visibility: b.visibility === 'private' ? 'private' : 'public',
+    allow_requests: b.allow_requests ? 1 : 0
+  };
 }
 
 // Validate an event form (create and edit share it).
@@ -442,6 +482,18 @@ async function api(request, env, url) {
       .bind(handle, name, bio, city, color, kind, avatar, banner, me.id).run();
     return json({ user: publicUser({ ...me, handle, name, bio, city, color, kind, avatar, banner }) });
   }
+  // Event images: uploaded first, then attached to the event.
+  if (path === '/api/images' && method === 'POST') {
+    requireUser(me);
+    const b = await body(request);
+    const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(typeof b.data === 'string' ? b.data : '');
+    if (!m) fail(400, 'Send a JPEG, PNG or WebP image.');
+    const bytes = Uint8Array.from(atob(m[2]), (c) => c.charCodeAt(0));
+    if (bytes.length > 1400 * 1024) fail(413, 'That image is too large. Try a smaller one.');
+    const id = randomCode(16);
+    await env.DB.prepare('INSERT INTO images (id, owner_id, kind, mime, data) VALUES (?, ?, ?, ?, ?)').bind(id, me.id, 'event', m[1], bytes).run();
+    return json({ url: '/api/img/' + id }, 201);
+  }
   if (path === '/api/me/image' && method === 'POST') {
     requireUser(me);
     const b = await body(request);
@@ -487,7 +539,7 @@ async function api(request, env, url) {
   if (path === '/api/me/nights' && method === 'GET') {
     requireUser(me);
     const rows = (await env.DB.prepare(
-      `${EVENT_SELECT} JOIN rsvps r ON r.event_id = e.id AND r.user_id = ? ORDER BY e.starts_at`
+      `${EVENT_SELECT} JOIN rsvps r ON r.event_id = e.id AND r.user_id = ? WHERE ${UPCOMING} ORDER BY ${UPCOMING_ORDER}`
     ).bind(me.id).all()).results;
     return json({ events: rows.map(eventShape) });
   }
@@ -528,7 +580,7 @@ async function api(request, env, url) {
       picks = picks.concat(more).slice(0, 8);
     }
     const events = (await env.DB.prepare(
-      `${EVENT_SELECT} WHERE e.starts_at >= strftime('%Y-%m-%dT%H:%M', 'now', '-12 hours') ORDER BY e.starts_at LIMIT 30`
+      `${EVENT_SELECT} WHERE e.visibility = 'public' AND ${UPCOMING} ORDER BY ${UPCOMING_ORDER} LIMIT 30`
     ).all()).results.map(eventShape);
     const newcomers = (await env.DB.prepare(
       `SELECT u.* FROM users u WHERE ${notFollowed} ORDER BY u.created_at DESC LIMIT 8`
@@ -541,14 +593,10 @@ async function api(request, env, url) {
     const u = await userByHandle(env, seg[1]);
     if (!u) fail(404, 'No one has that handle.');
     if (seg.length === 2 && method === 'GET') {
-      const counts = await env.DB.prepare(
-        `SELECT (SELECT COUNT(*) FROM follows WHERE followee_id = ?1) AS followers,
-                (SELECT COUNT(*) FROM follows WHERE follower_id = ?1) AS following`
-      ).bind(u.id).first();
       const isFollowing = me ? !!(await env.DB.prepare('SELECT 1 FROM follows WHERE follower_id = ? AND followee_id = ?').bind(me.id, u.id).first()) : false;
       const events = (await env.DB.prepare(
-        `${EVENT_SELECT} WHERE e.host_id = ? AND e.starts_at >= strftime('%Y-%m-%dT%H:%M', 'now', '-12 hours') ORDER BY e.starts_at`
-      ).bind(u.id).all()).results.map(eventShape);
+        `${EVENT_SELECT} WHERE e.host_id = ?1 AND (e.visibility = 'public' OR ?1 = ?2) AND ${UPCOMING} ORDER BY ${UPCOMING_ORDER}`
+      ).bind(u.id, me ? me.id : -1).all()).results.map(eventShape);
       const top = (await env.DB.prepare(
         `SELECT u.* FROM follows f JOIN users u ON u.id = f.followee_id WHERE f.follower_id = ? ORDER BY f.created_at LIMIT 8`
       ).bind(u.id).all()).results.map(publicUser);
@@ -561,7 +609,7 @@ async function api(request, env, url) {
          ) ORDER BY at DESC LIMIT 40`
       ).bind(u.id).all()).results;
       return json({
-        user: publicUser(u), followers: counts.followers, following: counts.following,
+        user: publicUser(u),
         is_following: isFollowing, is_me: !!me && me.id === u.id,
         events, top8: top, posts: await hydratePosts(env, rows, me)
       });
@@ -662,27 +710,35 @@ async function api(request, env, url) {
   if (path === '/api/events' && method === 'POST') {
     requireUser(me);
     if (me.kind === 'member' && !me.is_admin) fail(403, 'Switch your page to Label / Promoter or Artist in Settings to create events.');
-    const b = await body(request);
-    const f = eventFields(b, me.color);
+    const f = await simpleEventFields(env, me, await body(request));
     const id = randomCode(8);
     await env.DB.prepare(
-      `INSERT INTO events (id, host_id, title, subtitle, starts_at, ends_at, venue, city, entry, price_cents, currency, commission_pct, capacity, lineup, about, color, ticket_url)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(id, me.id, f.title, f.subtitle, f.starts_at, f.ends_at, f.venue, f.city, f.entry, f.price_cents, f.currency,
-      f.commission_pct, f.capacity, f.lineup, f.about, f.color, f.ticket_url).run();
-    const title = f.title;
-    const announce = str(b.announce, 500) || `${title}${f.subtitle ? ' — ' + f.subtitle : ''}. RSVP is open.`;
-    await env.DB.prepare('INSERT INTO posts (author_id, text, event_id) VALUES (?, ?, ?)').bind(me.id, announce, id).run();
+      `INSERT INTO events (id, host_id, title, starts_at, color, image, caption, visibility, allow_requests, gl_token)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, me.id, f.title, f.starts_at, me.color, f.image, f.caption, f.visibility, f.allow_requests, randomCode(12)).run();
+    // Public nights are announced to followers; private ones only travel by their guestlist link.
+    if (f.visibility === 'public') {
+      await env.DB.prepare('INSERT INTO posts (author_id, text, event_id) VALUES (?, ?, ?)').bind(me.id, f.caption.slice(0, 500), id).run();
+    }
     return json({ id }, 201);
   }
   if (seg[0] === 'events' && seg[1]) {
     const ev = await env.DB.prepare(`${EVENT_SELECT} WHERE e.id = ?`).bind(seg[1]).first();
     if (!ev) fail(404, 'That event does not exist.');
     const isHost = !!me && (me.id === ev.host_id || !!me.is_admin);
+    const key = url.searchParams.get('k') || '';
+    const hasKey = !!ev.gl_token && key === ev.gl_token;
+    const onList = me ? !!(await env.DB.prepare('SELECT 1 FROM rsvps WHERE event_id = ? AND user_id = ?').bind(ev.id, me.id).first()) : false;
+    // A private night is only visible to its host, its guests, and people holding the guestlist link.
+    if (ev.visibility === 'private' && !isHost && !hasKey && !onList && method === 'GET') fail(404, 'That event does not exist.');
 
     if (seg.length === 2 && method === 'GET') {
       const out = eventShape(ev);
       out.is_host = isHost;
+      if (isHost) {
+        if (!ev.gl_token) { ev.gl_token = randomCode(12); await env.DB.prepare('UPDATE events SET gl_token = ? WHERE id = ?').bind(ev.gl_token, ev.id).run(); }
+        out.gl_token = ev.gl_token;
+      }
       // Line-up as a list; names that match a page on rsvp.fm link to it.
       const names = lineupNames(ev.lineup);
       const cands = names.map((n) => n.toLowerCase().replace(/^@/, '').replace(/[^a-z0-9_]/g, ''));
@@ -702,12 +758,12 @@ async function api(request, env, url) {
     }
     if (seg.length === 2 && method === 'PATCH') {
       if (!isHost) fail(403, 'Only the host can edit this event.');
-      const f = eventFields(await body(request), ev.color);
+      const f = await simpleEventFields(env, me, await body(request));
       await env.DB.prepare(
-        `UPDATE events SET title = ?, subtitle = ?, starts_at = ?, ends_at = ?, venue = ?, city = ?, entry = ?, price_cents = ?, currency = ?,
-         commission_pct = ?, capacity = ?, lineup = ?, about = ?, color = ?, ticket_url = ? WHERE id = ?`
-      ).bind(f.title, f.subtitle, f.starts_at, f.ends_at, f.venue, f.city, f.entry, f.price_cents, f.currency,
-        f.commission_pct, f.capacity, f.lineup, f.about, f.color, f.ticket_url, ev.id).run();
+        `UPDATE events SET title = ?, subtitle = '', starts_at = ?, image = ?, caption = ?, visibility = ?, allow_requests = ?,
+         venue = '', city = '', lineup = '', about = '' WHERE id = ?`
+      ).bind(f.title, f.starts_at, f.image, f.caption, f.visibility, f.allow_requests, ev.id).run();
+      if (!ev.gl_token) await env.DB.prepare('UPDATE events SET gl_token = ? WHERE id = ?').bind(randomCode(12), ev.id).run();
       return json({ id: ev.id });
     }
     if (seg.length === 2 && method === 'DELETE') {
@@ -723,6 +779,7 @@ async function api(request, env, url) {
       }
       if (method !== 'POST') fail(405, 'Method not allowed.');
       const b = await body(request);
+      if (ev.visibility === 'private' && !isHost && !(b.k && b.k === ev.gl_token)) fail(403, 'This guestlist is private. Ask the host for the link.');
       if (ev.capacity > 0 && ev.going >= ev.capacity) fail(409, 'This night is full.');
       let referrerId = null;
       if (b.ref) {
@@ -732,8 +789,34 @@ async function api(request, env, url) {
       await env.DB.prepare('INSERT OR IGNORE INTO rsvps (event_id, user_id, referrer_id) VALUES (?, ?, ?)').bind(ev.id, me.id, referrerId).run();
       return json({ going: true });
     }
+    // Someone without an account asks to be on the guestlist; the host approves.
+    if (seg[2] === 'request' && method === 'POST') {
+      if (!ev.allow_requests) fail(403, 'This guestlist does not take requests.');
+      const b = await body(request);
+      if (ev.visibility === 'private' && !(b.k && b.k === ev.gl_token)) fail(403, 'This guestlist is private. Ask the host for the link.');
+      const name = str(b.name, 80);
+      const email = str(b.email, 120).toLowerCase();
+      if (!name) fail(400, 'Tell the host your name.');
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail(400, 'Enter a valid email address.');
+      const dup = await env.DB.prepare('SELECT id FROM guest_requests WHERE event_id = ? AND email = ?').bind(ev.id, email).first();
+      if (dup) return json({ ok: true, already: true });
+      const { n } = await env.DB.prepare(`SELECT COUNT(*) AS n FROM guest_requests WHERE event_id = ? AND created_at > datetime('now', '-1 minute')`).bind(ev.id).first();
+      if (n > 20) fail(429, 'Too many requests right now. Try again in a minute.');
+      await env.DB.prepare('INSERT INTO guest_requests (event_id, name, email, note) VALUES (?, ?, ?, ?)').bind(ev.id, name, email, str(b.note, 300)).run();
+      return json({ ok: true }, 201);
+    }
+    if (seg[2] === 'requests' && seg[3] && method === 'POST') {
+      if (!isHost) fail(403, 'Only the host can answer requests.');
+      const b = await body(request);
+      const status = b.status === 'approved' ? 'approved' : b.status === 'declined' ? 'declined' : 'pending';
+      await env.DB.prepare('UPDATE guest_requests SET status = ? WHERE id = ? AND event_id = ?').bind(status, Number(seg[3]), ev.id).run();
+      return json({ ok: true, status });
+    }
     if (seg[2] === 'guests' && method === 'GET') {
       if (!isHost) fail(403, 'Only the host can see the guestlist.');
+      const requests = (await env.DB.prepare(
+        `SELECT id, name, email, note, status, created_at FROM guest_requests WHERE event_id = ? AND status != 'declined' ORDER BY created_at`
+      ).bind(ev.id).all()).results;
       const guests = (await env.DB.prepare(
         `SELECT u.handle, u.name, u.color, u.avatar, r.created_at, ref.handle AS ref_handle, ref.name AS ref_name
          FROM rsvps r JOIN users u ON u.id = r.user_id LEFT JOIN users ref ON ref.id = r.referrer_id
@@ -745,7 +828,7 @@ async function api(request, env, url) {
         handle, referred: n,
         owed_cents: ev.entry === 'ticket' ? Math.round((n * ev.price_cents * ev.commission_pct) / 100) : 0
       })).sort((a, b) => b.referred - a.referred);
-      return json({ guests, referrers });
+      return json({ guests, referrers, requests });
     }
   }
 
