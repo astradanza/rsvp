@@ -6,6 +6,7 @@
   // Flip to true the day ticketing opens.
   var MONEY = false;
   var me = null;          // logged-in user or null
+  var unread = false;     // something new on the Activity page
   var needsInvite = true; // false only before the very first account exists
   var main = document.getElementById('main');
   var hdr = document.getElementById('hdr');
@@ -153,6 +154,7 @@
   function setTab(name) {
     var nav = document.getElementById('tabs');
     nav.hidden = !me;
+    var dot = document.getElementById('notif-dot'); if (dot) dot.hidden = !unread || name === 'notifications';
     if (me) document.getElementById('tab-me').setAttribute('href', '/' + me.handle);
     Array.prototype.forEach.call(nav.querySelectorAll('a'), function (a) { a.classList.toggle('on', a.getAttribute('data-tab') === name); });
   }
@@ -168,17 +170,17 @@
       '<h1>Updates from artists &amp; labels.</h1>' +
       '<p>Follow the artists, labels and promoters you love, and hear from them directly: new records, new nights, nothing else. No ads, no algorithm, in the order they post. RSVP in one tap.</p>' +
       '<div class="acts" style="flex-wrap:wrap"><a class="pill big solid" href="/signup">Join</a><a class="pill big" href="/login">Log in</a></div></section>' +
-      '<div class="sep"></div><div id="disc"></div>';
-    renderDiscover(document.getElementById('disc'));
+      '';
   }
 
   function viewFeed() {
     if (!me) return viewWelcome();
     header({}); setTab('feed'); loading();
+    api('GET', '/session').then(function (j) { unread = !!j.unread; setTab('feed'); }).catch(function () {});
     api('GET', '/feed').then(function (j) {
       var h = '<div class="label gut bar">Following · chronological</div>';
       j.items.forEach(function (p) { h += postHtml(p); });
-      if (!j.items.length) h += '<div class="end">Your feed is empty. Follow a few people in <a class="accent" href="/discover">Discover</a>, or post something.</div>';
+      if (!j.items.length) h += '<div class="end">Your feed is empty. Open the pages of artists and labels you like and follow them, or post something.</div>';
       else h += '<div class="end">You\'re all caught up.</div>';
       main.innerHTML = '<div id="alert"></div>' + h;
       if (me.is_admin) api('GET', '/admin/ambassadors').then(function (a) {
@@ -213,6 +215,22 @@
       el.innerHTML = h;
     }).catch(function (e) { el.innerHTML = '<div class="end">' + esc(e.message) + '</div>'; });
   }
+  function viewNotifications() {
+    if (!me) return needLogin();
+    header({ title: 'Activity' }); unread = false; setTab('notifications'); loading();
+    api('GET', '/notifications').then(function (j) {
+      if (!j.items.length) { main.innerHTML = '<div class="end">Nothing yet. New followers, reposts, wall messages and guestlist activity show up here.</div>'; return; }
+      main.innerHTML = '<div>' + j.items.map(function (n) {
+        var face = n.actor ? av(n.actor, 36) : '<span style="width:36px;height:36px;border:1px solid var(--line);border-radius:50%;flex-shrink:0"></span>';
+        var who = n.actor ? n.actor.name : n.name;
+        return '<a class="row gut" href="' + esc(n.link) + '" style="gap:12px;align-items:flex-start' + (n.unread ? ';background:var(--surface)' : '') + '">' + face +
+          '<span style="display:flex;flex-direction:column;min-width:0;flex:1"><span style="font-size:14px;line-height:1.4;overflow-wrap:anywhere"><strong class="name" style="display:inline">' + esc(who) + '</strong> ' + esc(n.text) + '</span>' +
+          '<span class="meta">' + ago(n.at) + (n.action ? ' · to answer' : '') + '</span></span>' +
+          (n.unread ? '<span style="width:8px;height:8px;border-radius:50%;background:var(--accent);margin-top:6px;flex-shrink:0"></span>' : '') + '</a>';
+      }).join('') + '</div>';
+    }).catch(showError);
+  }
+
   function viewDiscover() {
     header({ title: 'Discover' }); setTab('discover'); loading(); renderDiscover(main);
   }
@@ -636,8 +654,7 @@
     if (me.is_admin) {
       h += '<div class="gut section sep" id="ambassadors"></div>' +
         '<div class="gut section sep"><h2>Admin</h2><form id="f-admin-invites" class="acts"><button class="pill" type="submit">Create 5 single-use codes</button></form>' +
-        '<form id="f-feature"><div class="field"><label for="fhandle">Feature in Discover (handle)</label><input id="fhandle" name="handle" autocapitalize="none" required></div>' +
-        '<div class="acts"><button class="pill" type="submit" name="featured" value="1">Feature</button><button class="pill ghost" type="submit" name="featured" value="0">Remove</button></div></form><div id="admin-out"></div></div>';
+        '<div id="admin-out"></div></div>';
     }
     h += '<div class="gut section sep" id="create"><h2>Create a page</h2><p class="small" style="margin:0">A label, a party series, an artist project, or a page for a partner. It is linked to your account: switch to it by tapping Me. Each page uses one of your invites.</p>' +
       '<form id="f-account">' +
@@ -711,7 +728,8 @@
     var p = location.pathname.replace(/\/+$/, '') || '/';
     var m;
     if (p === '/') return viewFeed();
-    if (p === '/discover') return viewDiscover();
+    if (p === '/discover') return go('/', true);
+    if (p === '/notifications') return viewNotifications();
     if (p === '/new') return viewNew();
     if (p === '/new/event') return viewNewEvent();
     if (p === '/login') return viewLogin();
@@ -949,7 +967,7 @@
 
   function boot() {
     return api('GET', '/session').then(function (j) {
-      me = j.user; needsInvite = j.needs_invite !== false;
+      me = j.user; needsInvite = j.needs_invite !== false; unread = !!j.unread;
     });
   }
   // Never stay stuck on "Loading…": give the session check 8 seconds, then render anyway.

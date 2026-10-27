@@ -12,6 +12,7 @@ const ADDED_COLUMNS = [
   ['users', 'banner', "TEXT NOT NULL DEFAULT ''"],
   ['users', 'claim_token', 'TEXT'],
   ['users', 'account_group', 'INTEGER'],
+  ['users', 'notif_seen_at', "TEXT NOT NULL DEFAULT ''"],
   ['events', 'ticket_url', "TEXT NOT NULL DEFAULT ''"],
   ['events', 'image', "TEXT NOT NULL DEFAULT ''"],
   ['events', 'caption', "TEXT NOT NULL DEFAULT ''"],
@@ -344,6 +345,38 @@ function lineupNames(text) {
   return parts.map((s) => s.trim()).filter(Boolean).slice(0, 60);
 }
 
+// Notifications are read straight from what happened (follows, reposts, wall, invites, lists, requests);
+// nothing is stored except when the person last opened the page.
+async function notificationsFor(env, me) {
+  const q = (sql, ...args) => env.DB.prepare(sql).bind(...args).all().then((r) => r.results);
+  const U = 'u.handle, u.name, u.color, u.avatar, u.kind';
+  const [follows, reposts, wall, joined, guests, requests, answered] = await Promise.all([
+    q(`SELECT f.created_at AS at, ${U} FROM follows f JOIN users u ON u.id = f.follower_id WHERE f.followee_id = ? ORDER BY f.created_at DESC LIMIT 40`, me.id),
+    q(`SELECT r.created_at AS at, p.id AS post_id, substr(p.text, 1, 80) AS text, ${U} FROM reposts r JOIN posts p ON p.id = r.post_id JOIN users u ON u.id = r.user_id
+       WHERE p.author_id = ? ORDER BY r.created_at DESC LIMIT 40`, me.id),
+    q(`SELECT w.created_at AS at, substr(w.text, 1, 80) AS text, ${U} FROM wall w JOIN users u ON u.id = w.author_id WHERE w.owner_id = ? AND w.author_id != ? ORDER BY w.created_at DESC LIMIT 40`, me.id, me.id),
+    q(`SELECT u.created_at AS at, ${U} FROM users u WHERE u.invited_by = ? ORDER BY u.created_at DESC LIMIT 40`, me.id),
+    q(`SELECT r.created_at AS at, r.list, e.id AS event_id, e.title, ${U} FROM rsvps r JOIN events e ON e.id = r.event_id JOIN users u ON u.id = r.user_id
+       WHERE e.host_id = ? AND r.user_id != ? ORDER BY r.created_at DESC LIMIT 60`, me.id, me.id),
+    q(`SELECT g.created_at AS at, g.list, g.name AS req_name, e.id AS event_id, e.title FROM guest_requests g JOIN events e ON e.id = g.event_id
+       WHERE e.host_id = ? AND g.status = 'pending' ORDER BY g.created_at DESC LIMIT 40`, me.id),
+    q(`SELECT g.created_at AS at, g.list, e.id AS event_id, e.title FROM guest_requests g JOIN events e ON e.id = g.event_id
+       WHERE g.email = ? AND g.status = 'approved' ORDER BY g.created_at DESC LIMIT 20`, me.email)
+  ]);
+  const who = (r) => ({ handle: r.handle, name: r.name, color: r.color, avatar: r.avatar || '', kind: r.kind });
+  const listWord = (l) => (l === 'ff' ? 'took a friends & family ticket for' : l === 'gl' ? 'joined the guestlist for' : 'is going to');
+  const items = [
+    ...follows.map((r) => ({ at: r.at, actor: who(r), text: 'followed you', link: '/' + r.handle })),
+    ...reposts.map((r) => ({ at: r.at, actor: who(r), text: 'reposted: ' + r.text, link: '/' + me.handle })),
+    ...wall.map((r) => ({ at: r.at, actor: who(r), text: 'wrote on your wall: ' + r.text, link: '/' + me.handle })),
+    ...joined.map((r) => ({ at: r.at, actor: who(r), text: 'joined rsvp.fm with your invite link', link: '/' + r.handle })),
+    ...guests.map((r) => ({ at: r.at, actor: who(r), text: listWord(r.list) + ' ' + r.title, link: '/e/' + r.event_id })),
+    ...requests.map((r) => ({ at: r.at, actor: null, name: r.req_name, text: 'asks for ' + (r.list === 'ff' ? 'a friends & family ticket' : 'the guestlist') + ' · ' + r.title, link: '/e/' + r.event_id, action: true })),
+    ...answered.map((r) => ({ at: r.at, actor: null, name: 'Your request', text: 'was accepted · ' + r.title, link: '/e/' + r.event_id }))
+  ].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0)).slice(0, 80);
+  return items;
+}
+
 async function userByHandle(env, handle) {
   const h = String(handle).toLowerCase().replace(/^@/, '');
   const u = await env.DB.prepare('SELECT * FROM users WHERE handle = ?').bind(h).first();
@@ -367,7 +400,8 @@ async function api(request, env, url) {
   // --- auth ---
   if (path === '/api/session' && method === 'GET') {
     if (!me) return json({ user: null, needs_invite: false });
-    return json({ user: { ...publicUser(me), email: me.email, is_admin: !!me.is_admin } });
+    const latest = (await notificationsFor(env, me))[0];
+    return json({ user: { ...publicUser(me), email: me.email, is_admin: !!me.is_admin }, unread: !!latest && latest.at > (me.notif_seen_at || '') });
   }
   if (path === '/api/signup' && method === 'POST') return signup(request, env, url);
   if (path === '/api/login' && method === 'POST') {
@@ -568,6 +602,16 @@ async function api(request, env, url) {
       `${EVENT_SELECT} JOIN rsvps r ON r.event_id = e.id AND r.user_id = ? WHERE ${UPCOMING} ORDER BY ${UPCOMING_ORDER}`
     ).bind(me.id).all()).results;
     return json({ events: rows.map(eventShape) });
+  }
+
+  // --- notifications ---
+  if (path === '/api/notifications' && method === 'GET') {
+    requireUser(me);
+    const items = await notificationsFor(env, me);
+    const seen = me.notif_seen_at || '';
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    await env.DB.prepare('UPDATE users SET notif_seen_at = ? WHERE id = ?').bind(now, me.id).run();
+    return json({ items: items.map((i) => ({ ...i, unread: i.at > seen })) });
   }
 
   // --- feed ---
