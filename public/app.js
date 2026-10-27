@@ -84,6 +84,9 @@
   // ---------- pieces ----------
   function av(u, size) {
     var c = u.color || '#A3A097';
+    if (u.avatar && /^\/(avatars|api\/img)\//.test(u.avatar)) {
+      return '<img class="av" src="' + esc(u.avatar) + '" alt="" width="' + size + '" height="' + size + '" loading="lazy" style="width:' + size + 'px;height:' + size + 'px;object-fit:cover;background:#000">';
+    }
     return '<span class="av" style="width:' + size + 'px;height:' + size + 'px;font-size:' + Math.round(size * 0.4) + 'px;background:' + esc(c) + ';color:' + fgFor(c) + '">' + esc((u.name || u.handle || '?').charAt(0).toUpperCase()) + '</span>';
   }
   function cover(e, h, big) {
@@ -200,7 +203,8 @@
     api('GET', '/users/' + encodeURIComponent(handle)).then(function (j) {
       var u = j.user, h = '';
       if (j.is_me) header({ back: history.length > 1, title: 'rsvp.fm/' + u.handle, right: '<a class="ico" aria-label="Settings" href="/settings">' + I.gear + '</a>' });
-      h += '<div class="banner" style="background:' + esc(u.color) + '"><div style="position:absolute;width:120px;height:120px;border-radius:50%;border:3px solid var(--ink);right:24px;top:-40px"></div><div style="position:absolute;width:40px;height:40px;border-radius:50%;background:var(--ink);right:140px;top:40px"></div></div>';
+      if (u.banner && /^\/api\/img\//.test(u.banner)) h += '<div class="banner" style="height:160px;background:' + esc(u.color) + ' url(' + esc(u.banner) + ') center/cover no-repeat"></div>';
+      else h += '<div class="banner" style="background:' + esc(u.color) + '"><div style="position:absolute;width:120px;height:120px;border-radius:50%;border:3px solid var(--ink);right:24px;top:-40px"></div><div style="position:absolute;width:40px;height:40px;border-radius:50%;background:var(--ink);right:140px;top:40px"></div></div>';
       h += '<div class="gut" style="display:flex;flex-direction:column;gap:10px;padding-block:0 16px"><div class="ptop"><span class="ring">' + av(u, 68) + '</span>' +
         (j.is_me ? '<a class="pill" href="/settings">Edit page</a>' : (me ? followBtn(u, j.is_following) : '<a class="pill solid" href="/login?next=/' + esc(u.handle) + '">Follow</a>')) + '</div>';
       h += '<div><h1>' + esc(u.name) + '</h1><div class="mono accent" style="font-size:12px;margin-top:2px">rsvp.fm/' + esc(u.handle) + (u.ambassador ? ' · AMBASSADOR' : '') + '</div></div>';
@@ -395,7 +399,23 @@
   function viewSettings() {
     if (!me) return needLogin();
     header({ back: true, title: 'Settings' }); setTab('me');
-    var h = '<div class="gut section"><h2>Your page</h2><form id="f-me">' +
+    var presets = [];
+    for (var i = 1; i <= 16; i++) presets.push('/avatars/' + (i < 10 ? '0' : '') + i + '.webp');
+    var custom = me.avatar && me.avatar.indexOf('/api/img/') === 0;
+    var h = '<div class="gut section"><h2>Profile photo</h2>' +
+      '<div style="display:flex;align-items:center;gap:14px"><span id="avprev">' + av(me, 72) + '</span>' +
+      '<div style="display:flex;flex-direction:column;gap:8px"><label class="pill" for="up-avatar" style="cursor:pointer">Upload my own photo</label>' +
+      '<input id="up-avatar" type="file" accept="image/*" data-kind="avatar" hidden><span class="small">' + (custom ? 'Using your photo.' : 'Or pick one of ours below.') + '</span></div></div>' +
+      '<div class="avgrid" role="radiogroup" aria-label="Default photos">' + presets.map(function (p, k) {
+        return '<label class="avopt"><input type="radio" name="avatar" form="f-me" value="' + p + '"' + (me.avatar === p ? ' checked' : '') + ' aria-label="Drawing ' + (k + 1) + '"><img src="' + p + '" alt="" width="64" height="64" loading="lazy"></label>';
+      }).join('') + '</div><p class="small" style="margin:0">Pick one, then tap Save at the bottom of “Your page”.</p></div>' +
+      '<div class="gut section sep"><h2>Header image</h2>' +
+      '<div id="bnprev" class="banner" style="height:120px;border-radius:12px;background:' + esc(me.color) + (me.banner ? ' url(' + esc(me.banner) + ') center/cover no-repeat' : '') + '"></div>' +
+      '<div class="acts" style="flex-wrap:wrap"><label class="pill" for="up-banner" style="cursor:pointer">' + (me.banner ? 'Replace header' : 'Upload a header') + '</label>' +
+      '<input id="up-banner" type="file" accept="image/*" data-kind="banner" hidden>' +
+      (me.banner ? '<button class="pill ghost" data-act="rmbanner">Remove</button>' : '') + '</div>' +
+      '<p class="small" style="margin:0">Wide images work best (3 to 1). We crop the center.</p></div>' +
+      '<div class="gut section sep"><h2>Your page</h2><form id="f-me">' +
       '<div class="field"><label for="name">Display name</label><input id="name" name="name" maxlength="60" value="' + esc(me.name) + '" required></div>' +
       '<div class="field"><label for="bio">Bio</label><textarea id="bio" name="bio" rows="3" maxlength="280">' + esc(me.bio) + '</textarea></div>' +
       '<div class="field"><label for="city">City</label><input id="city" name="city" maxlength="60" value="' + esc(me.city) + '"></div>' +
@@ -517,6 +537,8 @@
       if (b.getAttribute('data-confirm') !== '1') { b.setAttribute('data-confirm', '1'); b.textContent = 'Tap again to delete'; return done(); }
       var wh = b.getAttribute('data-handle');
       api('DELETE', '/wall/' + wh + '/' + id).then(function () { say('Deleted.'); return api('GET', '/users/' + wh).then(function (j) { renderWall(j.user, j.is_me); }); }).catch(function (e) { say(e.message); done(); });
+    } else if (act === 'rmbanner') {
+      api('PATCH', '/me', { banner: '' }).then(function (j) { for (var k in j.user) me[k] = j.user[k]; say('Header removed.'); viewSettings(); }).catch(function (e) { say(e.message); done(); });
     } else if (act === 'regeninvite') {
       if (b.getAttribute('data-confirm') !== '1') { b.setAttribute('data-confirm', '1'); b.textContent = 'Tap again: the old link stops working'; return done(); }
       api('POST', '/me/invites/regenerate', {}).then(function () { say('New invite link ready.'); loadInvites(); }).catch(function (e) { say(e.message); done(); });
@@ -565,6 +587,7 @@
     } else if (f.id === 'f-me') {
       api('PATCH', '/me', d).then(function (j) {
         for (var k in j.user) me[k] = j.user[k];
+        var ap = document.getElementById('avprev'); if (ap) ap.innerHTML = av(me, 72);
         say('Saved.'); if (btn) btn.disabled = false;
       }).catch(showErr);
     } else if (f.id === 'f-admin-invites') {
@@ -578,6 +601,38 @@
         say(featured ? '@' + d.handle + ' is featured in Discover.' : '@' + d.handle + ' removed from Discover.'); if (btn) btn.disabled = false;
       }).catch(showErr);
     }
+  });
+
+  // Resize and crop an image in the browser before upload: avatars 400×400, headers 1500×500.
+  function prepareImage(file, w, h) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file), img = new Image();
+      img.onload = function () {
+        var scale = Math.max(w / img.naturalWidth, h / img.naturalHeight);
+        var sw = w / scale, sh = h / scale, sx = (img.naturalWidth - sw) / 2, sy = (img.naturalHeight - sh) / 2;
+        var c = document.createElement('canvas'); c.width = w; c.height = h;
+        var ctx = c.getContext('2d'); ctx.fillStyle = '#0D0D0C'; ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
+        URL.revokeObjectURL(url);
+        resolve(c.toDataURL('image/jpeg', 0.85));
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('This file could not be read as an image. Try a JPEG or PNG.')); };
+      img.src = url;
+    });
+  }
+  document.addEventListener('change', function (ev) {
+    var input = ev.target;
+    if (!input.matches || !input.matches('input[type=file][data-kind]') || !input.files || !input.files[0]) return;
+    var kind = input.getAttribute('data-kind');
+    say('Uploading…');
+    prepareImage(input.files[0], kind === 'banner' ? 1500 : 400, kind === 'banner' ? 500 : 400)
+      .then(function (data) { return api('POST', '/me/image', { kind: kind, data: data }); })
+      .then(function (j) {
+        me[kind] = j.url;
+        say(kind === 'banner' ? 'Header updated.' : 'Photo updated.');
+        viewSettings();
+      })
+      .catch(function (e) { say(e.message); input.value = ''; });
   });
 
   window.addEventListener('popstate', route);

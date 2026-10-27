@@ -18,7 +18,9 @@ Runs entirely on Cloudflare: one Worker (API + static app) and one D1 database.
 - Member view: nights you're going to, people you brought, estimated commission.
 - Admin: unlimited invite link, single-use codes, feature pages in Discover.
 
-Not yet: payments and automatic payouts (tickets are reservations for now), image uploads, email (password reset, notifications).
+- Profile photo: pick one of 16 hand-drawn avatars (new members get one at random) or upload your own; optional header image. Uploads are resized in the browser and stored in D1.
+
+Not yet: payments and automatic payouts (tickets are reservations for now), event posters, email (password reset, notifications).
 
 ## Deploy (Cloudflare dashboard, no terminal)
 

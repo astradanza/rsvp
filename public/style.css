@@ -89,6 +89,13 @@ fieldset{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
 .swatches label{width:36px;height:36px;border-radius:50%;cursor:pointer;border:2px solid transparent}
 .swatches label:has(input:checked){border-color:var(--fg)}
 .swatches input{position:absolute;opacity:0;width:1px;height:1px}
+.avgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+@media (min-width:520px){.avgrid{grid-template-columns:repeat(8,minmax(0,1fr))}}
+.avopt{position:relative;display:block;border-radius:50%;cursor:pointer;aspect-ratio:1;max-width:100%}
+.avopt img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block;border:3px solid transparent}
+.avopt input{position:absolute;opacity:0;width:1px;height:1px}
+.avopt:has(input:checked) img{border-color:var(--accent)}
+.avopt input:focus-visible+img{outline:2px solid var(--accent);outline-offset:2px}
 .err{color:var(--accent);font:12px/1.5 var(--mono);margin:0}
 .code{font:700 14px var(--mono);letter-spacing:1px}
 .hero{padding-block:40px 24px;display:flex;flex-direction:column;gap:14px}

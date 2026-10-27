@@ -7,7 +7,9 @@ const ADDED_COLUMNS = [
   ['users', 'invite_link', 'TEXT'],
   ['users', 'invite_quota', 'INTEGER NOT NULL DEFAULT 10'],
   ['users', 'invited_by', 'INTEGER'],
-  ['users', 'ambassador', 'INTEGER NOT NULL DEFAULT 0']
+  ['users', 'ambassador', 'INTEGER NOT NULL DEFAULT 0'],
+  ['users', 'avatar', "TEXT NOT NULL DEFAULT ''"],
+  ['users', 'banner', "TEXT NOT NULL DEFAULT ''"]
 ];
 let schemaReady = null;
 function ensureSchema(env) {
@@ -25,7 +27,12 @@ function ensureSchema(env) {
           owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           text TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
-        env.DB.prepare('CREATE INDEX IF NOT EXISTS wall_owner ON wall(owner_id, created_at)')
+        env.DB.prepare('CREATE INDEX IF NOT EXISTS wall_owner ON wall(owner_id, created_at)'),
+        // Uploaded profile photos and headers (migrations/0004_images.sql)
+        env.DB.prepare(`CREATE TABLE IF NOT EXISTS images (id TEXT PRIMARY KEY,
+          owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL, mime TEXT NOT NULL, data BLOB NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')))`)
       ]);
     })().catch((e) => { schemaReady = null; throw e; });
   }
@@ -43,6 +50,14 @@ const RESERVED = new Set([
 ]);
 const HANDLE_RE = /^[a-z0-9_]{2,24}$/;
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+const PRESET_RE = /^\/avatars\/(0[1-9]|1[0-6])\.webp$/;
+const PRESETS = Array.from({ length: 16 }, (_, i) => `/avatars/${String(i + 1).padStart(2, '0')}.webp`);
+
+// Remove a previously uploaded image when it is replaced (preset avatars are static files, nothing to delete).
+async function dropImage(env, me, url) {
+  const m = /^\/api\/img\/([a-z0-9]+)$/.exec(url || '');
+  if (m) await env.DB.prepare('DELETE FROM images WHERE id = ? AND owner_id = ?').bind(m[1], me.id).run();
+}
 
 export default {
   async fetch(request, env) {
@@ -149,7 +164,7 @@ async function startSession(env, userId, url) {
 function publicUser(u) {
   return {
     handle: u.handle, name: u.name, kind: u.kind, bio: u.bio, city: u.city, color: u.color,
-    featured: !!u.featured, ambassador: !!u.ambassador
+    featured: !!u.featured, ambassador: !!u.ambassador, avatar: u.avatar || '', banner: u.banner || ''
   };
 }
 
@@ -173,10 +188,10 @@ function eventShape(e) {
     venue: e.venue, city: e.city, entry: e.entry, price_cents: e.price_cents, currency: e.currency,
     commission_pct: e.commission_pct, capacity: e.capacity, lineup: e.lineup, about: e.about, color: e.color,
     going: e.going || 0,
-    host: { handle: e.host_handle, name: e.host_name, color: e.host_color, kind: e.host_kind }
+    host: { handle: e.host_handle, name: e.host_name, color: e.host_color, kind: e.host_kind, avatar: e.host_avatar || '' }
   };
 }
-const EVENT_SELECT = `SELECT e.*, u.handle AS host_handle, u.name AS host_name, u.color AS host_color, u.kind AS host_kind,
+const EVENT_SELECT = `SELECT e.*, u.handle AS host_handle, u.name AS host_name, u.color AS host_color, u.kind AS host_kind, u.avatar AS host_avatar,
   (SELECT COUNT(*) FROM rsvps r WHERE r.event_id = e.id) AS going
   FROM events e JOIN users u ON u.id = e.host_id`;
 
@@ -266,16 +281,38 @@ async function api(request, env, url) {
     const city = typeof b.city === 'string' ? str(b.city, 60) : me.city;
     const color = COLOR_RE.test(b.color || '') ? b.color : me.color;
     const kind = ['member', 'promoter', 'artist'].includes(b.kind) ? b.kind : me.kind;
-    await env.DB.prepare('UPDATE users SET name = ?, bio = ?, city = ?, color = ?, kind = ? WHERE id = ?')
-      .bind(name, bio, city, color, kind, me.id).run();
-    return json({ user: publicUser({ ...me, name, bio, city, color, kind }) });
+    let avatar = me.avatar;
+    if (typeof b.avatar === 'string' && (b.avatar === '' || PRESET_RE.test(b.avatar))) {
+      await dropImage(env, me, me.avatar);
+      avatar = b.avatar;
+    }
+    let banner = me.banner;
+    if (b.banner === '') { await dropImage(env, me, me.banner); banner = ''; }
+    await env.DB.prepare('UPDATE users SET name = ?, bio = ?, city = ?, color = ?, kind = ?, avatar = ?, banner = ? WHERE id = ?')
+      .bind(name, bio, city, color, kind, avatar, banner, me.id).run();
+    return json({ user: publicUser({ ...me, name, bio, city, color, kind, avatar, banner }) });
+  }
+  if (path === '/api/me/image' && method === 'POST') {
+    requireUser(me);
+    const b = await body(request);
+    const kind = b.kind === 'banner' ? 'banner' : 'avatar';
+    const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(typeof b.data === 'string' ? b.data : '');
+    if (!m) fail(400, 'Send a JPEG, PNG or WebP image.');
+    const bytes = Uint8Array.from(atob(m[2]), (c) => c.charCodeAt(0));
+    if (bytes.length > 900 * 1024) fail(413, 'That image is too large. Try a smaller one.');
+    const id = randomCode(16);
+    await env.DB.prepare('INSERT INTO images (id, owner_id, kind, mime, data) VALUES (?, ?, ?, ?, ?)').bind(id, me.id, kind, m[1], bytes).run();
+    await dropImage(env, me, me[kind]);
+    const url = '/api/img/' + id;
+    await env.DB.prepare(`UPDATE users SET ${kind} = ? WHERE id = ?`).bind(url, me.id).run();
+    return json({ url }, 201);
   }
   if (path === '/api/me/invites' && method === 'GET') {
     requireUser(me);
     const link = await inviteLinkFor(env, me);
     const stats = await inviteStats(env, me);
     const joined = (await env.DB.prepare(
-      `SELECT handle, name, color, created_at FROM users WHERE invited_by = ? ORDER BY created_at DESC`
+      `SELECT handle, name, color, avatar, created_at FROM users WHERE invited_by = ? ORDER BY created_at DESC`
     ).bind(me.id).all()).results;
     return json({ link, ...stats, joined });
   }
@@ -389,19 +426,28 @@ async function api(request, env, url) {
     }
   }
 
+  // --- images ---
+  if (seg[0] === 'img' && seg[1] && method === 'GET') {
+    const img = await env.DB.prepare('SELECT mime, data FROM images WHERE id = ?').bind(seg[1]).first();
+    if (!img) return new Response('Not found', { status: 404 });
+    return new Response(new Uint8Array(img.data), {
+      headers: { 'content-type': img.mime, 'cache-control': 'public, max-age=31536000, immutable' }
+    });
+  }
+
   // --- wall ---
   if (seg[0] === 'wall' && seg[1]) {
     const u = await userByHandle(env, seg[1]);
     if (!u) fail(404, 'No one has that handle.');
     if (seg.length === 2 && method === 'GET') {
       const rows = (await env.DB.prepare(
-        `SELECT w.id, w.text, w.created_at, w.author_id, a.handle, a.name, a.color, a.kind
+        `SELECT w.id, w.text, w.created_at, w.author_id, a.handle, a.name, a.color, a.kind, a.avatar
          FROM wall w JOIN users a ON a.id = w.author_id WHERE w.owner_id = ? ORDER BY w.created_at DESC, w.id DESC LIMIT 100`
       ).bind(u.id).all()).results;
       return json({
         items: rows.map((r) => ({
           id: r.id, text: r.text, created_at: r.created_at,
-          author: { handle: r.handle, name: r.name, color: r.color, kind: r.kind },
+          author: { handle: r.handle, name: r.name, color: r.color, kind: r.kind, avatar: r.avatar },
           can_delete: !!me && (me.id === r.author_id || me.id === u.id || !!me.is_admin)
         }))
       });
@@ -531,7 +577,7 @@ async function api(request, env, url) {
     if (seg[2] === 'guests' && method === 'GET') {
       if (!isHost) fail(403, 'Only the host can see the guestlist.');
       const guests = (await env.DB.prepare(
-        `SELECT u.handle, u.name, u.color, r.created_at, ref.handle AS ref_handle, ref.name AS ref_name
+        `SELECT u.handle, u.name, u.color, u.avatar, r.created_at, ref.handle AS ref_handle, ref.name AS ref_name
          FROM rsvps r JOIN users u ON u.id = r.user_id LEFT JOIN users ref ON ref.id = r.referrer_id
          WHERE r.event_id = ? ORDER BY r.created_at`
       ).bind(ev.id).all()).results;
@@ -631,10 +677,10 @@ async function signup(request, env, url) {
   const color = COLOR_RE.test(b.color || '') ? b.color : palette[Math.floor(Math.random() * palette.length)];
   const invitedBy = inviter ? inviter.id : (invite ? invite.created_by : null);
   const user = await env.DB.prepare(
-    `INSERT INTO users (handle, email, password_hash, name, kind, color, is_admin, featured, invite_link, invite_quota, invited_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`
+    `INSERT INTO users (handle, email, password_hash, name, kind, color, is_admin, featured, invite_link, invite_quota, invited_by, avatar)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`
   ).bind(handle, email, await hashPassword(password), name, kind, color, first ? 1 : 0, first ? 1 : 0,
-    randomCode(8), DEFAULT_QUOTA, invitedBy).first();
+    randomCode(8), DEFAULT_QUOTA, invitedBy, PRESETS[Math.floor(Math.random() * PRESETS.length)]).first();
 
   const stmts = [];
   if (invite) stmts.push(env.DB.prepare(`UPDATE invites SET used_by = ?, used_at = datetime('now') WHERE code = ?`).bind(user.id, invite.code));
