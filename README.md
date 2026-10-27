@@ -22,8 +22,8 @@ Not yet: payments and automatic payouts (tickets are reservations for now), imag
 ## Deploy (Cloudflare dashboard, no terminal)
 
 1. Cloudflare dashboard → **Workers & Pages** → **Create** → **Import a repository** → pick `rsvp-fm`.
-2. Leave the build command empty. Set the **deploy command** to `npm run deploy` (it creates the database tables, then deploys).
-3. Deploy. Cloudflare creates the `rsvp-fm` D1 database automatically on first deploy.
+2. Leave the build command empty and the deploy command on its default (`npx wrangler deploy`).
+3. Deploy. Cloudflare creates the `rsvp-fm` D1 database on first deploy, and the Worker creates its tables on the first request.
 4. Worker → **Settings** → **Domains & Routes** → **Add** → **Custom domain** → `rsvp.fm`.
 5. Open rsvp.fm and sign up first: that account is the admin.
 

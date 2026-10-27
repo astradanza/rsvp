@@ -1,4 +1,14 @@
 // rsvp.fm — Cloudflare Worker: JSON API under /api, static app for everything else.
+import { SCHEMA } from './schema.js';
+
+// Create the tables on first use (idempotent), so a plain `wrangler deploy` is enough.
+let schemaReady = null;
+function ensureSchema(env) {
+  if (!schemaReady) {
+    schemaReady = env.DB.batch(SCHEMA.map((s) => env.DB.prepare(s))).catch((e) => { schemaReady = null; throw e; });
+  }
+  return schemaReady;
+}
 
 const SESSION_DAYS = 30;
 const INVITES_PER_MEMBER = 3;
@@ -15,6 +25,7 @@ export default {
     const url = new URL(request.url);
     if (url.pathname.startsWith('/api/')) {
       try {
+        await ensureSchema(env);
         return await api(request, env, url);
       } catch (e) {
         if (e instanceof HttpError) return json({ error: e.message }, e.status);

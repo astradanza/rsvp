@@ -1,6 +1,6 @@
 -- rsvp.fm initial schema
 
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   handle TEXT NOT NULL UNIQUE COLLATE NOCASE,
   email TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -15,13 +15,13 @@ CREATE TABLE users (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE sessions (
+CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   expires_at TEXT NOT NULL
 );
 
-CREATE TABLE invites (
+CREATE TABLE IF NOT EXISTS invites (
   code TEXT PRIMARY KEY,
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   used_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -29,15 +29,15 @@ CREATE TABLE invites (
   used_at TEXT
 );
 
-CREATE TABLE follows (
+CREATE TABLE IF NOT EXISTS follows (
   follower_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   followee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (follower_id, followee_id)
 );
-CREATE INDEX follows_followee ON follows(followee_id);
+CREATE INDEX IF NOT EXISTS follows_followee ON follows(followee_id);
 
-CREATE TABLE events (
+CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
   host_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
@@ -56,32 +56,32 @@ CREATE TABLE events (
   color TEXT NOT NULL DEFAULT '#E8A80C',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX events_host ON events(host_id);
-CREATE INDEX events_starts ON events(starts_at);
+CREATE INDEX IF NOT EXISTS events_host ON events(host_id);
+CREATE INDEX IF NOT EXISTS events_starts ON events(starts_at);
 
-CREATE TABLE rsvps (
+CREATE TABLE IF NOT EXISTS rsvps (
   event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   referrer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (event_id, user_id)
 );
-CREATE INDEX rsvps_user ON rsvps(user_id);
-CREATE INDEX rsvps_referrer ON rsvps(referrer_id);
+CREATE INDEX IF NOT EXISTS rsvps_user ON rsvps(user_id);
+CREATE INDEX IF NOT EXISTS rsvps_referrer ON rsvps(referrer_id);
 
-CREATE TABLE posts (
+CREATE TABLE IF NOT EXISTS posts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   text TEXT NOT NULL,
   event_id TEXT REFERENCES events(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX posts_author ON posts(author_id, created_at);
+CREATE INDEX IF NOT EXISTS posts_author ON posts(author_id, created_at);
 
-CREATE TABLE reposts (
+CREATE TABLE IF NOT EXISTS reposts (
   post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (post_id, user_id)
 );
-CREATE INDEX reposts_user ON reposts(user_id, created_at);
+CREATE INDEX IF NOT EXISTS reposts_user ON reposts(user_id, created_at);
