@@ -105,7 +105,17 @@
     return '<div class="cover" style="height:' + h + 'px;background:var(--surface);border-bottom:1px solid var(--line)">' +
       '<div class="t" style="color:var(--fg)"><div class="t1" style="font-size:' + (big ? 30 : 22) + 'px">' + esc(first) + '</div></div></div>';
   }
-  function whenLine(e) { return e.starts_at ? fmtDate(e.starts_at) + ' · ' + fmtTime(e.starts_at) : ''; }
+  // "Sat 14 Nov · 15:00 → 02:00" when it ends the same night, full end date when it runs over several days.
+  function whenLine(e) {
+    if (!e.starts_at) return '';
+    var line = fmtDate(e.starts_at) + ' · ' + fmtTime(e.starts_at);
+    var s0 = parseLocal(e.starts_at), e0 = parseLocal(e.ends_at);
+    if (e0) {
+      var hours = (e0 - s0) / 3600000;
+      line += ' → ' + (hours > 0 && hours < 24 ? fmtTime(e.ends_at) : fmtDate(e.ends_at) + ' · ' + fmtTime(e.ends_at));
+    } else if (e.ends_at) line += ' → ' + e.ends_at;
+    return line;
+  }
   function postHtml(p) {
     var a = p.author, e = p.event, h = '<article class="post gut">';
     if (p.reposted_by) h += '<div class="rp">' + I.rep.replace(/20/g, '14') + '<span>' + esc(p.reposted_by.name) + ' reposted</span></div>';
@@ -385,7 +395,8 @@
       '<input id="up-event" type="file" accept="image/*" data-kind="event" hidden>' +
       (v.image ? '<button class="pill ghost" type="button" data-act="rmevimg">Remove</button>' : '') + '</div></div>' +
       '<div class="field"><label for="caption">Caption</label><textarea id="caption" name="caption" rows="8" maxlength="2000" required placeholder="Name of the night, where, who plays, anything you want to say.">' + esc(v.caption || '') + '</textarea></div>' +
-      '<div class="field"><label for="starts_at">Date (optional)</label><input id="starts_at" name="starts_at" type="datetime-local" value="' + esc((v.starts_at || '').slice(0, 16)) + '"></div>' +
+      '<div class="two"><div class="field"><label for="starts_at">Starts (optional)</label><input id="starts_at" name="starts_at" type="datetime-local" value="' + esc((v.starts_at || '').slice(0, 16)) + '"></div>' +
+      '<div class="field"><label for="ends_at">Ends (optional)</label><input id="ends_at" name="ends_at" type="datetime-local" value="' + esc(/^\d{4}-/.test(v.ends_at || '') ? v.ends_at.slice(0, 16) : '') + '"></div></div>' +
       '<fieldset><legend class="field">Who can see it</legend><div class="seg">' +
       '<label><input type="radio" name="visibility" value="public"' + (priv ? '' : ' checked') + '><span>Public</span></label>' +
       '<label><input type="radio" name="visibility" value="private"' + (priv ? ' checked' : '') + '><span>Private · link only</span></label></div></fieldset>' +

@@ -15,7 +15,7 @@ Runs entirely on Cloudflare: one Worker (API + static app) and one D1 database.
 - Change your handle from Settings. Old handles keep redirecting to you (pages and referral links don't break) and can't be taken by anyone else.
 - Follow / unfollow. Feed = posts and reposts from people you follow, newest first. No algorithm.
 - Posts and reposts. Members can post; anyone can repost.
-- Events (labels, promoters, artists): an image, a caption, an optional date. Public (announced to followers, listed on the page and in Discover) or private (only reachable with the guestlist link). Each event has a guestlist link `rsvp.fm/e/id?k=…`; members join in one tap. Optionally, people without an account can request a spot (name, email, note) and the host accepts or declines. No counters anywhere: no follower counts, no "going" counts.
+- Events (labels, promoters, artists): an image, a caption, an optional start and end (date and time). Public (announced to followers, listed on the page and in Discover) or private (only reachable with the guestlist link). Each event has a guestlist link `rsvp.fm/e/id?k=…`; members join in one tap. Optionally, people without an account can request a spot (name, email, note) and the host accepts or declines. No counters anywhere: no follower counts, no "going" counts.
 - Share links carry `?ref=handle`; the guestlist records who brought whom.
 - Host view on each event: the guestlist link, requests to accept or decline, and the guestlist with who brought whom.
 - Member view: nights you're going to, people you brought, estimated commission.

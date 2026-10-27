@@ -224,7 +224,9 @@ const EVENT_SELECT = `SELECT e.*, u.handle AS host_handle, u.name AS host_name, 
   (SELECT COUNT(*) FROM rsvps r WHERE r.event_id = e.id) AS going
   FROM events e JOIN users u ON u.id = e.host_id`;
 // Upcoming = dated in the future (or last 12 hours), or undated and posted in the last 30 days.
-const UPCOMING = `(e.starts_at >= strftime('%Y-%m-%dT%H:%M', 'now', '-12 hours') OR (e.starts_at = '' AND e.created_at >= datetime('now', '-30 days')))`;
+const UPCOMING = `(e.starts_at >= strftime('%Y-%m-%dT%H:%M', 'now', '-12 hours')
+  OR (e.ends_at LIKE '____-__-__T%' AND e.ends_at >= strftime('%Y-%m-%dT%H:%M', 'now'))
+  OR (e.starts_at = '' AND e.created_at >= datetime('now', '-30 days')))`;
 const UPCOMING_ORDER = `CASE WHEN e.starts_at = '' THEN 1 ELSE 0 END, e.starts_at, e.created_at DESC`;
 
 async function eventsByIds(env, ids, me) {
@@ -275,13 +277,17 @@ async function simpleEventFields(env, me, b) {
   if (!caption) fail(400, 'Write a caption.');
   const starts = str(b.starts_at, 25);
   if (starts && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(starts)) fail(400, 'Pick a valid date and time, or leave it empty.');
+  const ends = str(b.ends_at, 25);
+  if (ends && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(ends)) fail(400, 'Pick a valid end date and time, or leave it empty.');
+  if (ends && !starts) fail(400, 'Add a start date before the end.');
+  if (ends && ends.slice(0, 16) <= starts.slice(0, 16)) fail(400, 'The end must be after the start.');
   let image = str(b.image, 80);
   if (image) {
     const m = /^\/api\/img\/([a-z0-9]+)$/.exec(image);
     if (!m || !(await env.DB.prepare('SELECT 1 FROM images WHERE id = ? AND owner_id = ?').bind(m[1], me.id).first())) image = '';
   }
   return {
-    caption, image, starts_at: starts ? starts.slice(0, 16) : '',
+    caption, image, starts_at: starts ? starts.slice(0, 16) : '', ends_at: ends ? ends.slice(0, 16) : '',
     title: caption.split('\n')[0].slice(0, 80),
     visibility: b.visibility === 'private' ? 'private' : 'public',
     allow_requests: b.allow_requests ? 1 : 0
@@ -713,9 +719,9 @@ async function api(request, env, url) {
     const f = await simpleEventFields(env, me, await body(request));
     const id = randomCode(8);
     await env.DB.prepare(
-      `INSERT INTO events (id, host_id, title, starts_at, color, image, caption, visibility, allow_requests, gl_token)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(id, me.id, f.title, f.starts_at, me.color, f.image, f.caption, f.visibility, f.allow_requests, randomCode(12)).run();
+      `INSERT INTO events (id, host_id, title, starts_at, ends_at, color, image, caption, visibility, allow_requests, gl_token)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, me.id, f.title, f.starts_at, f.ends_at, me.color, f.image, f.caption, f.visibility, f.allow_requests, randomCode(12)).run();
     // Public nights are announced to followers; private ones only travel by their guestlist link.
     if (f.visibility === 'public') {
       await env.DB.prepare('INSERT INTO posts (author_id, text, event_id) VALUES (?, ?, ?)').bind(me.id, f.caption.slice(0, 500), id).run();
@@ -760,9 +766,9 @@ async function api(request, env, url) {
       if (!isHost) fail(403, 'Only the host can edit this event.');
       const f = await simpleEventFields(env, me, await body(request));
       await env.DB.prepare(
-        `UPDATE events SET title = ?, subtitle = '', starts_at = ?, image = ?, caption = ?, visibility = ?, allow_requests = ?,
+        `UPDATE events SET title = ?, subtitle = '', starts_at = ?, ends_at = ?, image = ?, caption = ?, visibility = ?, allow_requests = ?,
          venue = '', city = '', lineup = '', about = '' WHERE id = ?`
-      ).bind(f.title, f.starts_at, f.image, f.caption, f.visibility, f.allow_requests, ev.id).run();
+      ).bind(f.title, f.starts_at, f.ends_at, f.image, f.caption, f.visibility, f.allow_requests, ev.id).run();
       if (!ev.gl_token) await env.DB.prepare('UPDATE events SET gl_token = ? WHERE id = ?').bind(randomCode(12), ev.id).run();
       return json({ id: ev.id });
     }
