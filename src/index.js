@@ -19,6 +19,14 @@ function ensureSchema(env) {
       if (missing.length) await env.DB.batch(missing.map(([t, c, def]) => env.DB.prepare(`ALTER TABLE ${t} ADD COLUMN ${c} ${def}`)));
       await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS users_invite_link ON users(invite_link)').run();
       await env.DB.prepare('CREATE INDEX IF NOT EXISTS users_invited_by ON users(invited_by)').run();
+      // Public wall on each profile (migrations/0003_wall.sql)
+      await env.DB.batch([
+        env.DB.prepare(`CREATE TABLE IF NOT EXISTS wall (id INTEGER PRIMARY KEY AUTOINCREMENT,
+          owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          text TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
+        env.DB.prepare('CREATE INDEX IF NOT EXISTS wall_owner ON wall(owner_id, created_at)')
+      ]);
     })().catch((e) => { schemaReady = null; throw e; });
   }
   return schemaReady;
@@ -378,6 +386,45 @@ async function api(request, env, url) {
       else if (method === 'DELETE') await env.DB.prepare('DELETE FROM follows WHERE follower_id = ? AND followee_id = ?').bind(me.id, u.id).run();
       else fail(405, 'Method not allowed.');
       return json({ following: method === 'POST' });
+    }
+  }
+
+  // --- wall ---
+  if (seg[0] === 'wall' && seg[1]) {
+    const u = await userByHandle(env, seg[1]);
+    if (!u) fail(404, 'No one has that handle.');
+    if (seg.length === 2 && method === 'GET') {
+      const rows = (await env.DB.prepare(
+        `SELECT w.id, w.text, w.created_at, w.author_id, a.handle, a.name, a.color, a.kind
+         FROM wall w JOIN users a ON a.id = w.author_id WHERE w.owner_id = ? ORDER BY w.created_at DESC, w.id DESC LIMIT 100`
+      ).bind(u.id).all()).results;
+      return json({
+        items: rows.map((r) => ({
+          id: r.id, text: r.text, created_at: r.created_at,
+          author: { handle: r.handle, name: r.name, color: r.color, kind: r.kind },
+          can_delete: !!me && (me.id === r.author_id || me.id === u.id || !!me.is_admin)
+        }))
+      });
+    }
+    if (seg.length === 2 && method === 'POST') {
+      requireUser(me);
+      const b = await body(request);
+      const text = str(b.text, 500);
+      if (!text) fail(400, 'Write something first.');
+      const recent = await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM wall WHERE author_id = ? AND created_at > datetime('now', '-1 minute')`
+      ).bind(me.id).first();
+      if (recent.n >= 5) fail(429, 'Slow down a little, then try again.');
+      await env.DB.prepare('INSERT INTO wall (owner_id, author_id, text) VALUES (?, ?, ?)').bind(u.id, me.id, text).run();
+      return json({ ok: true }, 201);
+    }
+    if (seg.length === 3 && method === 'DELETE') {
+      requireUser(me);
+      const w = await env.DB.prepare('SELECT * FROM wall WHERE id = ? AND owner_id = ?').bind(Number(seg[2]), u.id).first();
+      if (!w) fail(404, 'That message is gone.');
+      if (me.id !== w.author_id && me.id !== u.id && !me.is_admin) fail(403, 'Only the author or the page owner can delete this.');
+      await env.DB.prepare('DELETE FROM wall WHERE id = ?').bind(w.id).run();
+      return json({ ok: true });
     }
   }
 

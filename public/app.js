@@ -218,12 +218,37 @@
         j.top8.forEach(function (f) { h += '<a class="g" href="/' + esc(f.handle) + '">' + av(f, 56) + '<span>' + esc(f.name) + '</span></a>'; });
         h += '</div></section>';
       }
-      h += '<div class="sep">';
+      h += '<section class="gut section sep" id="wall" data-handle="' + esc(u.handle) + '"><h2>Wall</h2><p class="small" style="margin:0">Loading…</p></section>';
+      h += '<div class="sep"><div class="gut" style="padding-top:16px"><h2>Posts</h2></div>';
       j.posts.forEach(function (p) { h += postHtml(p); });
       if (!j.posts.length) h += '<div class="end">No posts yet.</div>';
       main.innerHTML = h + '</div>';
       if (j.is_me) renderMine(document.getElementById('mine'));
+      renderWall(u, j.is_me);
     }).catch(showError);
+  }
+  function renderWall(u, isMe) {
+    var el = document.getElementById('wall'); if (!el) return;
+    api('GET', '/wall/' + encodeURIComponent(u.handle)).then(function (j) {
+      var h = '<h2>Wall</h2>';
+      if (me) {
+        h += '<form id="f-wall" data-handle="' + esc(u.handle) + '"><div class="field"><label for="walltext">' +
+          (isMe ? 'Write on your own wall' : 'Write on ' + esc(u.name) + '\'s wall') + '</label>' +
+          '<textarea id="walltext" name="text" rows="2" maxlength="500" required placeholder="' + (isMe ? 'Pin a note for visitors' : 'Say something. Everyone can read it.') + '"></textarea></div>' +
+          '<p class="err" id="err" hidden></p><div class="acts"><button class="pill on" type="submit">Post on the wall</button><span class="small">Public</span></div></form>';
+      } else {
+        h += '<p class="small" style="margin:0"><a class="accent" href="/login?next=/' + esc(u.handle) + '">Log in</a> to write on this wall.</p>';
+      }
+      if (!j.items.length) h += '<p class="small" style="margin:0">Nothing here yet.' + (isMe ? ' Your friends can leave you messages here.' : ' Be the first.') + '</p>';
+      j.items.forEach(function (w) {
+        h += '<div class="post" style="padding-block:12px"><div style="display:flex;align-items:center;gap:10px">' +
+          '<a class="who" href="/' + esc(w.author.handle) + '" style="flex:1;min-width:0">' + av(w.author, 32) +
+          '<span style="min-width:0"><span class="name">' + esc(w.author.name) + '</span><span class="meta">@' + esc(w.author.handle) + ' · ' + ago(w.created_at) + '</span></span></a>' +
+          (w.can_delete ? '<button class="ico" data-act="delwall" data-id="' + w.id + '" data-handle="' + esc(u.handle) + '">Delete</button>' : '') +
+          '</div><p class="txt">' + esc(w.text) + '</p></div>';
+      });
+      el.innerHTML = h;
+    }).catch(function (e) { el.innerHTML = '<h2>Wall</h2><p class="err">' + esc(e.message) + '</p>'; });
   }
   function renderMine(el) {
     Promise.all([api('GET', '/me/referrals'), api('GET', '/me/nights')]).then(function (r) {
@@ -488,6 +513,10 @@
     } else if (act === 'delevent') {
       if (b.getAttribute('data-confirm') !== '1') { b.setAttribute('data-confirm', '1'); b.textContent = 'Tap again to delete the event and its guestlist'; return done(); }
       api('DELETE', '/events/' + id).then(function () { say('Event deleted.'); go('/' + me.handle); }).catch(function (e) { say(e.message); done(); });
+    } else if (act === 'delwall') {
+      if (b.getAttribute('data-confirm') !== '1') { b.setAttribute('data-confirm', '1'); b.textContent = 'Tap again to delete'; return done(); }
+      var wh = b.getAttribute('data-handle');
+      api('DELETE', '/wall/' + wh + '/' + id).then(function () { say('Deleted.'); return api('GET', '/users/' + wh).then(function (j) { renderWall(j.user, j.is_me); }); }).catch(function (e) { say(e.message); done(); });
     } else if (act === 'regeninvite') {
       if (b.getAttribute('data-confirm') !== '1') { b.setAttribute('data-confirm', '1'); b.textContent = 'Tap again: the old link stops working'; return done(); }
       api('POST', '/me/invites/regenerate', {}).then(function () { say('New invite link ready.'); loadInvites(); }).catch(function (e) { say(e.message); done(); });
@@ -523,6 +552,12 @@
       api('POST', '/login', d).then(boot).then(function () { go(safeNext, true); }).catch(showErr);
     } else if (f.id === 'f-signup') {
       api('POST', '/signup', d).then(boot).then(function () { say('Welcome to rsvp.fm.'); go('/' + me.handle, true); }).catch(showErr);
+    } else if (f.id === 'f-wall') {
+      var wh = f.getAttribute('data-handle');
+      api('POST', '/wall/' + wh, d).then(function () {
+        say('Posted on the wall.');
+        api('GET', '/users/' + wh).then(function (j) { renderWall(j.user, j.is_me); });
+      }).catch(showErr);
     } else if (f.id === 'f-post') {
       api('POST', '/posts', d).then(function () { say('Posted.'); go('/'); }).catch(showErr);
     } else if (f.id === 'f-event') {
