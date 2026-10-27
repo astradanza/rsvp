@@ -86,6 +86,7 @@
     rep: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 1l4 4-4 4M3 11V9a4 4 0 014-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 01-4 4H3"/></svg>',
     share: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17L17 7M8 7h9v9"/></svg>',
     back: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>',
+    search: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>',
     gear: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>'
   };
 
@@ -187,14 +188,15 @@
 
   function viewFeed() {
     if (!me) return viewWelcome();
-    header({}); setTab('feed'); loading();
+    header({ right: '<a class="ico" aria-label="Search" href="/search">' + I.search + '</a>' }); setTab('feed'); loading();
     api('GET', '/session').then(function (j) { unread = !!j.unread; setTab('feed'); }).catch(function () {});
     api('GET', '/feed').then(function (j) {
       var h = '<div class="label gut bar">Following · chronological</div>';
       j.items.forEach(function (p) { h += postHtml(p); });
       if (!j.items.length) h += '<div class="end">Your feed is empty. Open the pages of artists and labels you like and follow them, or post something.</div>';
       else h += '<div class="end">You\'re all caught up.</div>';
-      main.innerHTML = '<div id="alert"></div>' + h;
+      main.innerHTML = '<div id="alert"></div><div id="suggest"></div>' + h;
+      renderSuggestions(document.getElementById('suggest'), j.items.length ? 6 : 12);
       if (me.is_admin) api('GET', '/admin/ambassadors').then(function (a) {
         var el = document.getElementById('alert');
         if (!el || !a.low.length) return;
@@ -227,6 +229,62 @@
       el.innerHTML = h;
     }).catch(function (e) { el.innerHTML = '<div class="end">' + esc(e.message) + '</div>'; });
   }
+  // Who to follow: people followed by the people you follow, then artists and labels.
+  function personCard(u) {
+    return '<div class="pick" style="flex:0 0 150px;padding:14px"><a href="/' + esc(u.handle) + '" style="display:flex;flex-direction:column;gap:8px;min-width:0">' + av(u, 48) +
+      '<span class="name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(u.name) + '</span>' +
+      '<span class="meta" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">@' + esc(u.handle) + '</span>' +
+      (u.reason ? '<span class="small" style="font-size:11px;line-height:1.3">' + esc(u.reason) + '</span>' : '') + '</a>' + followBtn(u, false) + '</div>';
+  }
+  function renderSuggestions(el, max) {
+    if (!el || !me) return;
+    api('GET', '/suggestions').then(function (j) {
+      var list = j.users.slice(0, max);
+      if (!list.length) { el.innerHTML = ''; return; }
+      el.innerHTML = '<section style="border-bottom:1px solid var(--line);padding-block:14px 4px"><div class="gut" style="display:flex;justify-content:space-between;align-items:baseline">' +
+        '<span class="label">Suggested for you</span><a class="small" href="/search">See more</a></div>' +
+        '<div class="picks gut">' + list.map(personCard).join('') + '</div></section>';
+    }).catch(function () { el.innerHTML = ''; });
+  }
+  function personRowFollow(u) {
+    return '<div class="row" style="gap:12px"><a href="/' + esc(u.handle) + '" style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">' + av(u, 40) +
+      '<span style="display:flex;flex-direction:column;min-width:0"><span class="name">' + esc(u.name) + '</span><span class="meta">@' + esc(u.handle) + ' · ' + esc(kindLabel(u.kind)) + (u.city ? ' · ' + esc(u.city) : '') + '</span>' +
+      (u.reason && u.reason !== kindLabel(u.kind) ? '<span class="small" style="font-size:11px">' + esc(u.reason) + '</span>' : '') + '</span></a>' +
+      (me && !u.is_me ? followBtn(u, !!u.is_following) : '') + '</div>';
+  }
+  var searchTimer;
+  function viewSearch() {
+    header({ back: true, title: 'Search' }); setTab('feed');
+    var q0 = new URLSearchParams(location.search).get('q') || '';
+    main.innerHTML = '<div class="gut section"><div class="field"><label for="sq">Search people, labels, artists and events</label>' +
+      '<input id="sq" type="search" autocomplete="off" autocapitalize="none" placeholder="Name, @handle or city" value="' + esc(q0) + '"></div></div>' +
+      '<div id="sres"></div>';
+    var input = document.getElementById('sq'), out = document.getElementById('sres');
+    function showSuggestions() {
+      if (!me) { out.innerHTML = ''; return; }
+      api('GET', '/suggestions').then(function (j) {
+        if (input.value.trim()) return;
+        out.innerHTML = j.users.length ? '<section class="gut"><span class="label">Suggested for you</span><div>' + j.users.map(personRowFollow).join('') + '</div></section>'
+          : '<div class="end">Search for a name, an @handle or a city.</div>';
+      }).catch(function () {});
+    }
+    function run() {
+      var q = input.value.trim();
+      try { history.replaceState({}, '', q ? '/search?q=' + encodeURIComponent(q) : '/search'); } catch (e) {}
+      if (!q) return showSuggestions();
+      api('GET', '/search?q=' + encodeURIComponent(q)).then(function (j) {
+        if (input.value.trim() !== q) return;
+        var h = '';
+        if (j.users.length) h += '<section class="gut"><span class="label">People</span><div>' + j.users.map(personRowFollow).join('') + '</div></section>';
+        if (j.events.length) h += '<section class="gut" style="padding-top:16px"><span class="label">Events</span><div>' + j.events.map(function (e) { return evRow(e, '@' + e.host.handle + (e.starts_at ? ' · ' + whenLine(e) : '')); }).join('') + '</div></section>';
+        out.innerHTML = h || '<div class="end">No one or nothing matches “' + esc(q) + '”.</div>';
+      }).catch(function (e) { out.innerHTML = '<div class="end">' + esc(e.message) + '</div>'; });
+    }
+    input.addEventListener('input', function () { clearTimeout(searchTimer); searchTimer = setTimeout(run, 220); });
+    run();
+    input.focus();
+  }
+
   function viewNotifications() {
     if (!me) return needLogin();
     header({ title: 'Activity' }); unread = false; setTab('notifications'); loading();
@@ -742,6 +800,7 @@
     if (p === '/') return viewFeed();
     if (p === '/discover') return go('/', true);
     if (p === '/notifications') return viewNotifications();
+    if (p === '/search') return viewSearch();
     if (p === '/new') return viewNew();
     if (p === '/new/event') return viewNewEvent();
     if (p === '/login') return viewLogin();

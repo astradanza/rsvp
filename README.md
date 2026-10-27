@@ -13,6 +13,8 @@ Runs entirely on Cloudflare: one Worker (API + static app) and one D1 database.
 - Ambassadors: admins see members running low on invites (2 or fewer left) on their feed and in Settings, and can make them ambassadors (50 invites) or top them up by 10.
 - Pages `rsvp.fm/handle` with color, bio, city, Top 8, upcoming nights, posts, and a public wall: any member can write on it, the author or the page owner can delete.
 - Change your handle from Settings. Old handles keep redirecting to you (pages and referral links don't break) and can't be taken by anyone else.
+- Search (magnifier at the top of the feed, `/search`): people and pages by name, @handle or city, plus public upcoming events.
+- Suggestions: "Suggested for you" at the top of the feed and on the search page — people followed by the people you follow ("Followed by A and B"), then artists and labels. No ranking algorithm, just your network.
 - Follow / unfollow. Feed = posts and reposts from people you follow, newest first. No algorithm.
 - Posts and reposts. Members can post; anyone can repost.
 - Events (labels, promoters, artists): an image, a caption, an optional start and end (date and time). Public (announced to followers and listed on the page) or private (only reachable with the guestlist link). Each event has two lists, each switched on or off by the host: the guestlist and friends & family tickets. Each list has its own link (`rsvp.fm/e/id?k=…`): members who open it are on that list in one tap. Separately, any member can tap "I'm going" on an event they can see. Requests can be allowed per list: members ask in one tap, people without an account leave a name, email and note; the host accepts or declines. No counters anywhere: no follower counts, no "going" counts.

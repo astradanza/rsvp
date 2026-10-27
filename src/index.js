@@ -604,6 +604,52 @@ async function api(request, env, url) {
     return json({ events: rows.map(eventShape) });
   }
 
+  // --- search: pages by name or handle, public upcoming events by caption ---
+  if (path === '/api/search' && method === 'GET') {
+    const term = (url.searchParams.get('q') || '').trim().replace(/^@/, '').slice(0, 60);
+    if (term.length < 1) return json({ users: [], events: [] });
+    const like = '%' + term.replace(/[%_]/g, (c) => '\\' + c) + '%';
+    const users = (await env.DB.prepare(
+      `SELECT u.* FROM users u WHERE (u.handle LIKE ?1 ESCAPE '\\' OR u.name LIKE ?1 ESCAPE '\\' OR u.city LIKE ?1 ESCAPE '\\')
+       ORDER BY CASE WHEN u.handle = ?2 THEN 0 WHEN u.handle LIKE ?3 ESCAPE '\\' THEN 1 ELSE 2 END, u.kind != 'member' DESC, u.name LIMIT 25`
+    ).bind(like, term.toLowerCase(), term.toLowerCase().replace(/[%_]/g, (c) => '\\' + c) + '%').all()).results;
+    const followed = me ? new Set((await env.DB.prepare('SELECT followee_id FROM follows WHERE follower_id = ?').bind(me.id).all()).results.map((r) => r.followee_id)) : new Set();
+    const events = (await env.DB.prepare(
+      `${EVENT_SELECT} WHERE e.visibility = 'public' AND ${UPCOMING} AND (e.caption LIKE ?1 ESCAPE '\\' OR e.title LIKE ?1 ESCAPE '\\') ORDER BY ${UPCOMING_ORDER} LIMIT 10`
+    ).bind(like).all()).results.map(eventShape);
+    return json({
+      users: users.map((u) => ({ ...publicUser(u), is_following: followed.has(u.id), is_me: !!me && me.id === u.id })),
+      events
+    });
+  }
+
+  // --- suggestions: people followed by the people you follow, then pages of artists and labels ---
+  if (path === '/api/suggestions' && method === 'GET') {
+    requireUser(me);
+    const fof = (await env.DB.prepare(
+      `SELECT u.*, COUNT(*) AS n, GROUP_CONCAT(v.name, '|') AS via FROM follows f1
+         JOIN follows f2 ON f2.follower_id = f1.followee_id
+         JOIN users u ON u.id = f2.followee_id
+         JOIN users v ON v.id = f1.followee_id
+       WHERE f1.follower_id = ?1 AND u.id != ?1
+         AND u.id NOT IN (SELECT followee_id FROM follows WHERE follower_id = ?1)
+         AND (u.account_group IS NULL OR u.account_group != ?2)
+       GROUP BY u.id ORDER BY n DESC, u.kind != 'member' DESC LIMIT 12`
+    ).bind(me.id, me.account_group || -1).all()).results;
+    const out = fof.map((u) => ({ ...publicUser(u), reason: 'Followed by ' + String(u.via || '').split('|').slice(0, 2).join(' and ') }));
+    if (out.length < 12) {
+      const seen = new Set(fof.map((u) => u.id));
+      const more = (await env.DB.prepare(
+        `SELECT u.* FROM users u WHERE u.id != ?1 AND u.kind != 'member'
+           AND u.id NOT IN (SELECT followee_id FROM follows WHERE follower_id = ?1)
+           AND (u.account_group IS NULL OR u.account_group != ?2)
+         ORDER BY u.featured DESC, (SELECT COUNT(*) FROM events e WHERE e.host_id = u.id) DESC, u.created_at DESC LIMIT 24`
+      ).bind(me.id, me.account_group || -1).all()).results.filter((u) => !seen.has(u.id));
+      for (const u of more) { if (out.length >= 12) break; out.push({ ...publicUser(u), reason: u.kind === 'artist' ? 'Artist' : 'Label / Promoter' }); }
+    }
+    return json({ users: out });
+  }
+
   // --- notifications ---
   if (path === '/api/notifications' && method === 'GET') {
     requireUser(me);
