@@ -17,19 +17,32 @@ const ADDED_COLUMNS = [
   ['events', 'caption', "TEXT NOT NULL DEFAULT ''"],
   ['events', 'visibility', "TEXT NOT NULL DEFAULT 'public'"],
   ['events', 'allow_requests', 'INTEGER NOT NULL DEFAULT 0'],
-  ['events', 'gl_token', "TEXT NOT NULL DEFAULT ''"]
+  ['events', 'gl_token', "TEXT NOT NULL DEFAULT ''"],
+  // Two lists per event: the guestlist and friends & family tickets, each with its own link and request switch.
+  ['events', 'gl_on', 'INTEGER NOT NULL DEFAULT 1'],
+  ['events', 'ff_on', 'INTEGER NOT NULL DEFAULT 0'],
+  ['events', 'ff_requests', 'INTEGER NOT NULL DEFAULT 0'],
+  ['events', 'ff_token', "TEXT NOT NULL DEFAULT ''"],
+  ['rsvps', 'list', "TEXT NOT NULL DEFAULT 'gl'"]
 ];
+// Columns on tables that ensureSchema creates itself, added after those tables exist.
+const LATE_COLUMNS = [
+  ['guest_requests', 'list', "TEXT NOT NULL DEFAULT 'gl'"]
+];
+async function addMissingColumns(env, list) {
+  const cols = {};
+  for (const t of new Set(list.map(([t]) => t))) {
+    cols[t] = new Set((await env.DB.prepare(`PRAGMA table_info(${t})`).all()).results.map((c) => c.name));
+  }
+  const missing = list.filter(([t, c]) => !cols[t].has(c));
+  if (missing.length) await env.DB.batch(missing.map(([t, c, def]) => env.DB.prepare(`ALTER TABLE ${t} ADD COLUMN ${c} ${def}`)));
+}
 let schemaReady = null;
 function ensureSchema(env) {
   if (!schemaReady) {
     schemaReady = (async () => {
       await env.DB.batch(SCHEMA.map((s) => env.DB.prepare(s)));
-      const cols = {};
-      for (const t of new Set(ADDED_COLUMNS.map(([t]) => t))) {
-        cols[t] = new Set((await env.DB.prepare(`PRAGMA table_info(${t})`).all()).results.map((c) => c.name));
-      }
-      const missing = ADDED_COLUMNS.filter(([t, c]) => !cols[t].has(c));
-      if (missing.length) await env.DB.batch(missing.map(([t, c, def]) => env.DB.prepare(`ALTER TABLE ${t} ADD COLUMN ${c} ${def}`)));
+      await addMissingColumns(env, ADDED_COLUMNS);
       await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS users_invite_link ON users(invite_link)').run();
       await env.DB.prepare('CREATE INDEX IF NOT EXISTS users_invited_by ON users(invited_by)').run();
       // Public wall on each profile (migrations/0003_wall.sql)
@@ -55,6 +68,7 @@ function ensureSchema(env) {
           kind TEXT NOT NULL, mime TEXT NOT NULL, data BLOB NOT NULL,
           created_at TEXT NOT NULL DEFAULT (datetime('now')))`)
       ]);
+      await addMissingColumns(env, LATE_COLUMNS);
     })().catch((e) => { schemaReady = null; throw e; });
   }
   return schemaReady;
@@ -217,6 +231,7 @@ function eventShape(e) {
     commission_pct: e.commission_pct, capacity: e.capacity, lineup: e.lineup, about: e.about, color: e.color,
     ticket_url: e.ticket_url || '',
     image: e.image || '', caption: captionOf(e), visibility: e.visibility || 'public', allow_requests: !!e.allow_requests,
+    gl_on: e.gl_on == null ? true : !!e.gl_on, ff_on: !!e.ff_on, ff_requests: !!e.ff_requests,
     host: { handle: e.host_handle, name: e.host_name, color: e.host_color, kind: e.host_kind, avatar: e.host_avatar || '' }
   };
 }
@@ -290,7 +305,10 @@ async function simpleEventFields(env, me, b) {
     caption, image, starts_at: starts ? starts.slice(0, 16) : '', ends_at: ends ? ends.slice(0, 16) : '',
     title: caption.split('\n')[0].slice(0, 80),
     visibility: b.visibility === 'private' ? 'private' : 'public',
-    allow_requests: b.allow_requests ? 1 : 0
+    gl_on: b.gl_on ? 1 : 0,
+    allow_requests: b.gl_on && b.allow_requests ? 1 : 0,
+    ff_on: b.ff_on ? 1 : 0,
+    ff_requests: b.ff_on && b.ff_requests ? 1 : 0
   };
 }
 
@@ -719,9 +737,10 @@ async function api(request, env, url) {
     const f = await simpleEventFields(env, me, await body(request));
     const id = randomCode(8);
     await env.DB.prepare(
-      `INSERT INTO events (id, host_id, title, starts_at, ends_at, color, image, caption, visibility, allow_requests, gl_token)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(id, me.id, f.title, f.starts_at, f.ends_at, me.color, f.image, f.caption, f.visibility, f.allow_requests, randomCode(12)).run();
+      `INSERT INTO events (id, host_id, title, starts_at, ends_at, color, image, caption, visibility, allow_requests, gl_token, gl_on, ff_on, ff_requests, ff_token)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, me.id, f.title, f.starts_at, f.ends_at, me.color, f.image, f.caption, f.visibility, f.allow_requests, randomCode(12),
+      f.gl_on, f.ff_on, f.ff_requests, randomCode(12)).run();
     // Public nights are announced to followers; private ones only travel by their guestlist link.
     if (f.visibility === 'public') {
       await env.DB.prepare('INSERT INTO posts (author_id, text, event_id) VALUES (?, ?, ?)').bind(me.id, f.caption.slice(0, 500), id).run();
@@ -733,17 +752,25 @@ async function api(request, env, url) {
     if (!ev) fail(404, 'That event does not exist.');
     const isHost = !!me && (me.id === ev.host_id || !!me.is_admin);
     const key = url.searchParams.get('k') || '';
-    const hasKey = !!ev.gl_token && key === ev.gl_token;
-    const onList = me ? !!(await env.DB.prepare('SELECT 1 FROM rsvps WHERE event_id = ? AND user_id = ?').bind(ev.id, me.id).first()) : false;
+    // A link opens one list: the guestlist link or the friends & family link.
+    const keyList = key && key === ev.gl_token ? 'gl' : key && key === ev.ff_token ? 'ff' : '';
+    const hasKey = !!keyList;
+    const myRow = me ? await env.DB.prepare('SELECT list FROM rsvps WHERE event_id = ? AND user_id = ?').bind(ev.id, me.id).first() : null;
+    const onList = !!myRow;
     // A private night is only visible to its host, its guests, and people holding the guestlist link.
     if (ev.visibility === 'private' && !isHost && !hasKey && !onList && method === 'GET') fail(404, 'That event does not exist.');
 
     if (seg.length === 2 && method === 'GET') {
       const out = eventShape(ev);
       out.is_host = isHost;
+      out.key_list = keyList;
+      out.my_list = myRow ? myRow.list : '';
+      if (me) out.my_request = await env.DB.prepare(`SELECT list, status FROM guest_requests WHERE event_id = ? AND email = ? AND status != 'declined'`).bind(ev.id, me.email).first() || null;
       if (isHost) {
         if (!ev.gl_token) { ev.gl_token = randomCode(12); await env.DB.prepare('UPDATE events SET gl_token = ? WHERE id = ?').bind(ev.gl_token, ev.id).run(); }
+        if (!ev.ff_token) { ev.ff_token = randomCode(12); await env.DB.prepare('UPDATE events SET ff_token = ? WHERE id = ?').bind(ev.ff_token, ev.id).run(); }
         out.gl_token = ev.gl_token;
+        out.ff_token = ev.ff_token;
       }
       // Line-up as a list; names that match a page on rsvp.fm link to it.
       const names = lineupNames(ev.lineup);
@@ -767,9 +794,10 @@ async function api(request, env, url) {
       const f = await simpleEventFields(env, me, await body(request));
       await env.DB.prepare(
         `UPDATE events SET title = ?, subtitle = '', starts_at = ?, ends_at = ?, image = ?, caption = ?, visibility = ?, allow_requests = ?,
-         venue = '', city = '', lineup = '', about = '' WHERE id = ?`
-      ).bind(f.title, f.starts_at, f.ends_at, f.image, f.caption, f.visibility, f.allow_requests, ev.id).run();
+         gl_on = ?, ff_on = ?, ff_requests = ?, venue = '', city = '', lineup = '', about = '' WHERE id = ?`
+      ).bind(f.title, f.starts_at, f.ends_at, f.image, f.caption, f.visibility, f.allow_requests, f.gl_on, f.ff_on, f.ff_requests, ev.id).run();
       if (!ev.gl_token) await env.DB.prepare('UPDATE events SET gl_token = ? WHERE id = ?').bind(randomCode(12), ev.id).run();
+      if (!ev.ff_token) await env.DB.prepare('UPDATE events SET ff_token = ? WHERE id = ?').bind(randomCode(12), ev.id).run();
       return json({ id: ev.id });
     }
     if (seg.length === 2 && method === 'DELETE') {
@@ -785,30 +813,45 @@ async function api(request, env, url) {
       }
       if (method !== 'POST') fail(405, 'Method not allowed.');
       const b = await body(request);
-      if (ev.visibility === 'private' && !isHost && !(b.k && b.k === ev.gl_token)) fail(403, 'This guestlist is private. Ask the host for the link.');
+      // Friends & family: only with its link. Guestlist: open on public events, link needed on private ones.
+      const list = b.list === 'ff' ? 'ff' : 'gl';
+      const bk = b.k || '';
+      if (list === 'ff') {
+        if (!ev.ff_on) fail(403, 'This event has no friends & family tickets.');
+        if (!isHost && bk !== ev.ff_token) fail(403, 'Friends & family tickets are sent by the host. You can request one instead.');
+      } else {
+        if (!ev.gl_on) fail(403, 'This event has no guestlist.');
+        if (ev.visibility === 'private' && !isHost && bk !== ev.gl_token && bk !== ev.ff_token) fail(403, 'This guestlist is private. Ask the host for the link.');
+      }
       if (ev.capacity > 0 && ev.going >= ev.capacity) fail(409, 'This night is full.');
       let referrerId = null;
       if (b.ref) {
         const r = await userByHandle(env, b.ref);
         if (r && r.id !== me.id) referrerId = r.id;
       }
-      await env.DB.prepare('INSERT OR IGNORE INTO rsvps (event_id, user_id, referrer_id) VALUES (?, ?, ?)').bind(ev.id, me.id, referrerId).run();
+      await env.DB.prepare(
+        `INSERT INTO rsvps (event_id, user_id, referrer_id, list) VALUES (?, ?, ?, ?)
+         ON CONFLICT(event_id, user_id) DO UPDATE SET list = CASE WHEN excluded.list = 'ff' THEN 'ff' ELSE rsvps.list END`
+      ).bind(ev.id, me.id, referrerId, list).run();
       return json({ going: true });
     }
     // Someone without an account asks to be on the guestlist; the host approves.
     if (seg[2] === 'request' && method === 'POST') {
-      if (!ev.allow_requests) fail(403, 'This guestlist does not take requests.');
       const b = await body(request);
-      if (ev.visibility === 'private' && !(b.k && b.k === ev.gl_token)) fail(403, 'This guestlist is private. Ask the host for the link.');
-      const name = str(b.name, 80);
-      const email = str(b.email, 120).toLowerCase();
+      const list = b.list === 'ff' ? 'ff' : 'gl';
+      if (list === 'ff' ? !(ev.ff_on && ev.ff_requests) : !(ev.gl_on && ev.allow_requests)) {
+        fail(403, list === 'ff' ? 'This event does not take friends & family requests.' : 'This guestlist does not take requests.');
+      }
+      if (ev.visibility === 'private' && !isHost && !(b.k && (b.k === ev.gl_token || b.k === ev.ff_token))) fail(403, 'This event is private. Ask the host for the link.');
+      const name = me ? me.name + ' (@' + me.handle + ')' : str(b.name, 80);
+      const email = me ? me.email : str(b.email, 120).toLowerCase();
       if (!name) fail(400, 'Tell the host your name.');
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail(400, 'Enter a valid email address.');
-      const dup = await env.DB.prepare('SELECT id FROM guest_requests WHERE event_id = ? AND email = ?').bind(ev.id, email).first();
+      const dup = await env.DB.prepare('SELECT id FROM guest_requests WHERE event_id = ? AND email = ? AND list = ?').bind(ev.id, email, list).first();
       if (dup) return json({ ok: true, already: true });
       const { n } = await env.DB.prepare(`SELECT COUNT(*) AS n FROM guest_requests WHERE event_id = ? AND created_at > datetime('now', '-1 minute')`).bind(ev.id).first();
       if (n > 20) fail(429, 'Too many requests right now. Try again in a minute.');
-      await env.DB.prepare('INSERT INTO guest_requests (event_id, name, email, note) VALUES (?, ?, ?, ?)').bind(ev.id, name, email, str(b.note, 300)).run();
+      await env.DB.prepare('INSERT INTO guest_requests (event_id, name, email, note, list) VALUES (?, ?, ?, ?, ?)').bind(ev.id, name, email, str(b.note, 300), list).run();
       return json({ ok: true }, 201);
     }
     if (seg[2] === 'requests' && seg[3] && method === 'POST') {
@@ -816,15 +859,25 @@ async function api(request, env, url) {
       const b = await body(request);
       const status = b.status === 'approved' ? 'approved' : b.status === 'declined' ? 'declined' : 'pending';
       await env.DB.prepare('UPDATE guest_requests SET status = ? WHERE id = ? AND event_id = ?').bind(status, Number(seg[3]), ev.id).run();
+      if (status === 'approved') {
+        const rq = await env.DB.prepare('SELECT * FROM guest_requests WHERE id = ?').bind(Number(seg[3])).first();
+        const member = rq ? await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(rq.email).first() : null;
+        if (member) {
+          await env.DB.prepare(
+            `INSERT INTO rsvps (event_id, user_id, list) VALUES (?, ?, ?) ON CONFLICT(event_id, user_id) DO UPDATE SET list = excluded.list`
+          ).bind(ev.id, member.id, rq.list).run();
+          await env.DB.prepare('DELETE FROM guest_requests WHERE id = ?').bind(rq.id).run();
+        }
+      }
       return json({ ok: true, status });
     }
     if (seg[2] === 'guests' && method === 'GET') {
       if (!isHost) fail(403, 'Only the host can see the guestlist.');
       const requests = (await env.DB.prepare(
-        `SELECT id, name, email, note, status, created_at FROM guest_requests WHERE event_id = ? AND status != 'declined' ORDER BY created_at`
+        `SELECT id, name, email, note, status, list, created_at FROM guest_requests WHERE event_id = ? AND status != 'declined' ORDER BY created_at`
       ).bind(ev.id).all()).results;
       const guests = (await env.DB.prepare(
-        `SELECT u.handle, u.name, u.color, u.avatar, r.created_at, ref.handle AS ref_handle, ref.name AS ref_name
+        `SELECT u.handle, u.name, u.color, u.avatar, r.list, r.created_at, ref.handle AS ref_handle, ref.name AS ref_name
          FROM rsvps r JOIN users u ON u.id = r.user_id LEFT JOIN users ref ON ref.id = r.referrer_id
          WHERE r.event_id = ? ORDER BY r.created_at`
       ).bind(ev.id).all()).results;

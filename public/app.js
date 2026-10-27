@@ -126,7 +126,8 @@
         (e.starts_at ? '<div class="cardfoot"><span>' + whenLine(e) + '</span></div>' : '') + '</a>';
     }
     h += '<div class="acts">';
-    if (e) h += '<button class="pill' + (e.is_going ? ' on' : '') + '" data-act="rsvp" data-id="' + esc(e.id) + '" data-going="' + (e.is_going ? 1 : 0) + '">' + rsvpLabel(e) + '</button>';
+    if (e && e.gl_on && e.visibility === 'public') h += '<button class="pill' + (e.is_going ? ' on' : '') + '" data-act="rsvp" data-list="gl" data-id="' + esc(e.id) + '" data-going="' + (e.is_going ? 1 : 0) + '">' + rsvpLabel(e) + '</button>';
+    else if (e) h += '<a class="pill" href="/e/' + esc(e.id) + '">Open</a>';
     if (!p.mine) h += '<button class="ico' + (p.i_reposted ? ' on' : '') + '" aria-label="Repost" data-act="repost" data-id="' + p.id + '" data-on="' + (p.i_reposted ? 1 : 0) + '">' + I.rep + '</button>';
     if (e) h += '<button class="ico" aria-label="Copy your referral link" data-act="share" data-id="' + esc(e.id) + '">' + I.share + '</button>';
     if (p.mine && !p.reposted_by) h += '<button class="ico" style="margin-left:' + (e ? '0' : 'auto') + '" data-act="delpost" data-id="' + p.id + '">Delete</button>';
@@ -309,30 +310,64 @@
       if (e.friends.length) h += '<div style="display:flex;align-items:center;gap:10px"><div class="faces">' + e.friends.map(function (f) { return '<span class="ring">' + av(f, 26) + '</span>'; }).join('') +
         '</div><span class="small" style="margin-left:8px">' + e.friends.map(function (f) { return esc(f.name); }).join(', ') + ' ' + (e.friends.length > 1 ? 'are' : 'is') + ' on the list</span></div>';
 
-      // Joining: members in one tap; people without an account can ask, if the host allows it.
+      // Joining. A link opens its list directly; otherwise members join the guestlist (public events) or ask.
+      var kl = e.key_list || '';
+      var canGl = e.gl_on && (e.visibility === 'public' || kl === 'gl' || kl === 'ff' || e.is_host);
+      var canFf = e.ff_on && (kl === 'ff' || e.is_host);
+      var reqGl = e.gl_on && e.allow_requests && !canGl;
+      var reqFf = e.ff_on && e.ff_requests && !canFf;
       if (me) {
-        h += '<div class="acts"><button class="pill big ' + (e.is_going ? 'on' : 'solid') + '" data-act="rsvp" data-id="' + esc(e.id) + '" data-going="' + (e.is_going ? 1 : 0) + '">' + rsvpLabel(e) + '</button>' +
-          (e.visibility === 'public' ? '<button class="ico" aria-label="Copy link" data-act="share" data-id="' + esc(e.id) + '">' + I.share + '</button>' : '') + '</div>';
-      } else if (e.allow_requests) {
-        h += '<section class="box"><h2>Request the guestlist</h2><p class="small" style="margin:0">No account needed. The host will confirm.</p>' +
-          '<form id="f-request" data-id="' + esc(e.id) + '" data-k="' + esc(k) + '">' +
-          '<div class="field"><label for="rq-name">Name</label><input id="rq-name" name="name" maxlength="80" autocomplete="name" required></div>' +
-          '<div class="field"><label for="rq-email">Email</label><input id="rq-email" name="email" type="email" autocomplete="email" required></div>' +
-          '<div class="field"><label for="rq-note">Note for the host (optional)</label><input id="rq-note" name="note" maxlength="300" placeholder="+1, who you know…"></div>' +
-          '<p class="err" id="err" hidden></p><button class="pill big solid" type="submit">Send my request</button></form>' +
-          '<p class="small" style="margin:0">Already a member? <a class="accent" href="/login?next=' + encodeURIComponent(location.pathname + location.search) + '">Log in</a></p></section>';
+        h += '<div class="acts" style="flex-wrap:wrap">';
+        if (e.my_list) {
+          h += '<button class="pill big on" data-act="rsvp" data-id="' + esc(e.id) + '" data-going="1">' + (e.my_list === 'ff' ? 'Friends & family ticket ✓' : 'On the guestlist ✓') + '</button>';
+          if (e.my_list === 'gl' && canFf) h += '<button class="pill" data-act="rsvp" data-list="ff" data-id="' + esc(e.id) + '" data-going="0">Take my friends &amp; family ticket</button>';
+        } else {
+          if (canFf) h += '<button class="pill big solid" data-act="rsvp" data-list="ff" data-id="' + esc(e.id) + '" data-going="0">Get my friends &amp; family ticket</button>';
+          if (canGl) h += '<button class="pill big ' + (canFf ? '' : 'solid') + '" data-act="rsvp" data-list="gl" data-id="' + esc(e.id) + '" data-going="0">Join the guestlist</button>';
+        }
+        if (e.my_request && e.my_request.status === 'pending') h += '<span class="small">Request sent for ' + (e.my_request.list === 'ff' ? 'a friends & family ticket' : 'the guestlist') + '. The host will confirm.</span>';
+        else if (!e.my_list || e.my_list === 'gl') {
+          if (reqFf) h += '<button class="pill" data-act="reqlist" data-list="ff" data-id="' + esc(e.id) + '">Request a friends &amp; family ticket</button>';
+          if (reqGl && !e.my_list) h += '<button class="pill" data-act="reqlist" data-list="gl" data-id="' + esc(e.id) + '">Request the guestlist</button>';
+        }
+        if (e.visibility === 'public') h += '<button class="ico" aria-label="Copy link" data-act="share" data-id="' + esc(e.id) + '">' + I.share + '</button>';
+        h += '</div>';
+      } else if (reqFf || reqGl || canFf || canGl) {
+        // Without an account everything goes through a request; a friends & family link asks for that list.
+        var opts = [];
+        if (e.ff_on && (e.ff_requests || kl === 'ff')) opts.push('ff');
+        if (e.gl_on && (e.allow_requests || kl === 'gl')) opts.push('gl');
+        if (opts.length) {
+          var first = kl && opts.indexOf(kl) >= 0 ? kl : opts[0];
+          h += '<section class="box"><h2>' + (opts.length > 1 ? 'Request a spot' : first === 'ff' ? 'Request a friends &amp; family ticket' : 'Request the guestlist') + '</h2>' +
+            '<p class="small" style="margin:0">No account needed. The host will confirm.</p>' +
+            '<form id="f-request" data-id="' + esc(e.id) + '" data-k="' + esc(k) + '">' +
+            (opts.length > 1 ? '<div class="seg">' + opts.map(function (l) { return '<label><input type="radio" name="list" value="' + l + '"' + (l === first ? ' checked' : '') + '><span>' + (l === 'ff' ? 'Friends &amp; family ticket' : 'Guestlist') + '</span></label>'; }).join('') + '</div>'
+              : '<input type="hidden" name="list" value="' + first + '">') +
+            '<div class="field"><label for="rq-name">Name</label><input id="rq-name" name="name" maxlength="80" autocomplete="name" required></div>' +
+            '<div class="field"><label for="rq-email">Email</label><input id="rq-email" name="email" type="email" autocomplete="email" required></div>' +
+            '<div class="field"><label for="rq-note">Note for the host (optional)</label><input id="rq-note" name="note" maxlength="300" placeholder="+1, who you know…"></div>' +
+            '<p class="err" id="err" hidden></p><button class="pill big solid" type="submit">Send my request</button></form>' +
+            '<p class="small" style="margin:0">Already a member? <a class="accent" href="/login?next=' + encodeURIComponent(location.pathname + location.search) + '">Log in</a></p></section>';
+        } else {
+          h += '<div class="acts"><a class="pill big solid" href="/login?next=' + encodeURIComponent(location.pathname + location.search) + '">Log in to join</a></div>';
+        }
       } else {
-        h += '<div class="acts"><a class="pill big solid" href="/login?next=' + encodeURIComponent(location.pathname + location.search) + '">Log in to join the guestlist</a></div>';
+        h += '<div class="acts"><a class="pill big solid" href="/login?next=' + encodeURIComponent(location.pathname + location.search) + '">Log in to join</a></div>';
       }
 
       if (e.is_host) {
-        var link = location.origin + '/e/' + e.id + '?k=' + e.gl_token;
-        h += '<section class="box"><span class="label">Your guestlist link</span>' +
-          '<span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(link.replace(/^https?:\/\//, '')) + '</span>' +
-          '<span class="small">' + (e.visibility === 'private' ? 'Private event: only people with this link can see it and join.' : 'Public event: anyone can see it; this link also works.') +
-          (e.allow_requests ? ' People without an account can request a spot.' : '') + '</span>' +
-          '<div class="acts" style="flex-wrap:wrap"><button class="pill solid" data-act="copylink" data-id="' + esc(link) + '">Copy link</button><a class="pill" href="/e/' + esc(e.id) + '/edit">Edit</a>' +
-          '<button class="pill ghost" data-act="delevent" data-id="' + esc(e.id) + '">Delete</button></div></section><div id="guests"></div>';
+        var base = location.origin + '/e/' + e.id + '?k=';
+        function linkBox(title, url, note) {
+          return '<section class="box"><span class="label">' + title + '</span>' +
+            '<span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(url.replace(/^https?:\/\//, '')) + '</span>' +
+            '<span class="small">' + note + '</span>' +
+            '<div><button class="pill solid" data-act="copylink" data-id="' + esc(url) + '">Copy link</button></div></section>';
+        }
+        if (e.gl_on) h += linkBox('Guestlist link', base + e.gl_token, (e.visibility === 'private' ? 'Private event: only people with a link can see it.' : 'Public event: members can also join from the page.') + (e.allow_requests ? ' Requests are on.' : ''));
+        if (e.ff_on) h += linkBox('Friends & family link', base + e.ff_token, 'Whoever opens it gets a friends & family ticket.' + (e.ff_requests ? ' Requests are on.' : ''));
+        if (!e.gl_on && !e.ff_on) h += '<p class="small" style="margin:0">Guestlist and friends &amp; family are both off. Turn one on in Edit.</p>';
+        h += '<div class="acts"><a class="pill" href="/e/' + esc(e.id) + '/edit">Edit</a><button class="pill ghost" data-act="delevent" data-id="' + esc(e.id) + '">Delete</button></div><div id="guests"></div>';
       }
       main.innerHTML = h + '</div>';
       if (e.is_host) renderGuests(e, document.getElementById('guests'));
@@ -346,22 +381,30 @@
       if (pending.length) {
         h += '<section class="box"><span class="label">Requests</span>';
         pending.forEach(function (r) {
-          h += '<div class="row" style="align-items:flex-start;gap:10px"><span style="flex:1;min-width:0"><span class="name">' + esc(r.name) + '</span><span class="meta" style="overflow-wrap:anywhere">' + esc(r.email) + '</span>' +
+          h += '<div class="row" style="align-items:flex-start;gap:10px"><span style="flex:1;min-width:0"><span class="name">' + esc(r.name) + '</span>' +
+            '<span class="meta" style="overflow-wrap:anywhere">' + (r.list === 'ff' ? 'Friends & family' : 'Guestlist') + ' · ' + esc(r.email) + '</span>' +
             (r.note ? '<span class="small" style="display:block">' + esc(r.note) + '</span>' : '') + '</span>' +
             '<button class="pill solid" data-act="approve" data-id="' + r.id + '" data-ev="' + esc(e.id) + '">Accept</button>' +
             '<button class="pill ghost" data-act="decline" data-id="' + r.id + '" data-ev="' + esc(e.id) + '">Decline</button></div>';
         });
         h += '</section>';
       }
-      h += '<section class="box"><span class="label">Guestlist</span>';
-      j.guests.forEach(function (g) {
-        h += '<a class="row" href="/' + esc(g.handle) + '">' + av(g, 28) + '<span class="name" style="flex:1">' + esc(g.name) + '</span><span class="small">' + (g.ref_handle ? 'via @' + esc(g.ref_handle) : '@' + esc(g.handle)) + '</span></a>';
+      ['ff', 'gl'].forEach(function (l) {
+        var members = j.guests.filter(function (g) { return (g.list || 'gl') === l; });
+        var others = approved.filter(function (r) { return (r.list || 'gl') === l; });
+        if (l === 'ff' && !e.ff_on && !members.length && !others.length) return;
+        if (l === 'gl' && !e.gl_on && !members.length && !others.length) return;
+        h += '<section class="box"><span class="label">' + LISTS[l] + '</span>';
+        members.forEach(function (g) {
+          h += '<a class="row" href="/' + esc(g.handle) + '">' + av(g, 28) + '<span class="name" style="flex:1">' + esc(g.name) + '</span><span class="small">' + (g.ref_handle ? 'via @' + esc(g.ref_handle) : '@' + esc(g.handle)) + '</span></a>';
+        });
+        others.forEach(function (r) {
+          h += '<div class="row"><span style="width:28px;height:28px;border:1px solid var(--line);border-radius:50%;flex-shrink:0"></span><span class="name" style="flex:1">' + esc(r.name) + '</span><span class="small" style="overflow-wrap:anywhere">' + esc(r.email) + '</span></div>';
+        });
+        if (!members.length && !others.length) h += '<p class="small" style="margin:0">No one yet. Send your link.</p>';
+        h += '</section>';
       });
-      approved.forEach(function (r) {
-        h += '<div class="row"><span style="width:28px;height:28px;border:1px solid var(--line);border-radius:50%;flex-shrink:0"></span><span class="name" style="flex:1">' + esc(r.name) + '</span><span class="small" style="overflow-wrap:anywhere">' + esc(r.email) + '</span></div>';
-      });
-      if (!j.guests.length && !approved.length) h += '<p class="small" style="margin:0">No one yet. Share your link.</p>';
-      el.innerHTML = h + '</section>';
+      el.innerHTML = h;
     }).catch(function () { el.innerHTML = ''; });
   }
 
@@ -400,11 +443,26 @@
       '<fieldset><legend class="field">Who can see it</legend><div class="seg">' +
       '<label><input type="radio" name="visibility" value="public"' + (priv ? '' : ' checked') + '><span>Public</span></label>' +
       '<label><input type="radio" name="visibility" value="private"' + (priv ? ' checked' : '') + '><span>Private · link only</span></label></div></fieldset>' +
-      '<label class="small" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer"><input type="checkbox" name="allow_requests" value="1"' + (v.allow_requests ? ' checked' : '') + ' style="width:auto;margin-top:2px">' +
-      '<span>Let people without an account request a spot (name and email). You accept or decline each request.</span></label>' +
+      listToggles(v) +
       '<p class="err" id="err" hidden></p><div class="acts"><button class="pill big solid" type="submit">' + (editId ? 'Save' : 'Publish') + '</button></div></form></div>';
   }
   function wireEventForm() {}
+  // Two lists per event, each with its own link and its own request switch.
+  function check(name, on, label, sub) {
+    return '<label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer"><input type="checkbox" name="' + name + '" value="1"' + (on ? ' checked' : '') + ' style="width:auto;margin-top:3px">' +
+      '<span style="display:flex;flex-direction:column"><span class="name" style="font-size:13px">' + label + '</span>' + (sub ? '<span class="small">' + sub + '</span>' : '') + '</span></label>';
+  }
+  function listToggles(v) {
+    var glOn = v.gl_on == null ? true : !!v.gl_on;
+    return '<fieldset class="box"><legend class="field" style="padding:0 6px">Guestlist</legend>' +
+      check('gl_on', glOn, 'Guestlist', 'Free entry. You get a link to send; on a public event members can also join from the page.') +
+      check('allow_requests', !!v.allow_requests, 'Accept guestlist requests', 'People can ask; you accept or decline.') + '</fieldset>' +
+      '<fieldset class="box"><legend class="field" style="padding:0 6px">Friends &amp; family tickets</legend>' +
+      check('ff_on', !!v.ff_on, 'Friends & family tickets', 'Special tickets you send with their own link.') +
+      check('ff_requests', !!v.ff_requests, 'Accept friends & family requests', 'People can ask for one; you accept or decline.') + '</fieldset>';
+  }
+  var LISTS = { gl: 'Guestlist', ff: 'Friends & family' };
+
 
   function viewNewEvent() {
     if (!me) return needLogin();
@@ -639,11 +697,11 @@
         say(on ? 'Unfollowed @' + id : 'Following @' + id);
       }).catch(function (e) { say(e.message); }).then(done);
     } else if (act === 'rsvp') {
-      var going = b.getAttribute('data-going') === '1', ref = null;
+      var going = b.getAttribute('data-going') === '1', ref = null, rlist = b.getAttribute('data-list') || 'gl';
       try { ref = sessionStorage.getItem('ref:' + id); } catch (e) {}
       var gk = ''; try { gk = sessionStorage.getItem('k:' + id) || ''; } catch (e) {}
-      api(going ? 'DELETE' : 'POST', '/events/' + id + '/rsvp', going ? undefined : { ref: ref, k: gk }).then(function () {
-        say(going ? 'Cancelled.' : 'You\'re on the list.'); route();
+      api(going ? 'DELETE' : 'POST', '/events/' + id + '/rsvp', going ? undefined : { ref: ref, k: gk, list: rlist }).then(function () {
+        say(going ? 'Cancelled.' : rlist === 'ff' ? 'Your friends & family ticket is confirmed.' : 'You\'re on the guestlist.'); route();
       }).catch(function (e) { say(e.message); done(); });
     } else if (act === 'repost') {
       var r = b.getAttribute('data-on') === '1';
@@ -665,6 +723,9 @@
     } else if (act === 'unlink') {
       if (b.getAttribute('data-confirm') !== '1') { b.setAttribute('data-confirm', '1'); b.textContent = 'Tap again: you will need to log in to switch back'; return done(); }
       api('POST', '/accounts/unlink', {}).then(function () { say('Removed from the group.'); viewSwitch(); }).catch(function (e) { say(e.message); done(); });
+    } else if (act === 'reqlist') {
+      var rk = ''; try { rk = sessionStorage.getItem('k:' + id) || ''; } catch (e) {}
+      api('POST', '/events/' + id + '/request', { list: b.getAttribute('data-list'), k: rk }).then(function () { say('Request sent. The host will confirm.'); route(); }).catch(function (e) { say(e.message); done(); });
     } else if (act === 'approve' || act === 'decline') {
       api('POST', '/events/' + b.getAttribute('data-ev') + '/requests/' + id, { status: act === 'approve' ? 'approved' : 'declined' }).then(function () {
         say(act === 'approve' ? 'Added to the guestlist.' : 'Declined.'); route();
