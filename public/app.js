@@ -148,7 +148,7 @@
   // ---------- views ----------
   function viewWelcome() {
     header({}); setTab('');
-    main.innerHTML = '<section class="hero gut"><span class="label accent">Invite only</span>' +
+    main.innerHTML = '<section class="hero gut"><span class="label">Invite only</span>' +
       '<h1>The guestlist for people who make nights happen.</h1>' +
       '<p>Promoters, artists and the people who dance with them. Follow who you trust, RSVP in one tap, share your link and get rewarded when friends come along.</p>' +
       '<div class="acts" style="flex-wrap:wrap"><a class="pill big solid" href="/signup">I have an invite</a><a class="pill big" href="/login">Log in</a></div></section>' +
@@ -214,7 +214,7 @@
       else h += '<div class="banner" style="background:' + esc(u.color) + '"><div style="position:absolute;width:120px;height:120px;border-radius:50%;border:3px solid var(--ink);right:24px;top:-40px"></div><div style="position:absolute;width:40px;height:40px;border-radius:50%;background:var(--ink);right:140px;top:40px"></div></div>';
       h += '<div class="gut" style="display:flex;flex-direction:column;gap:10px;padding-block:0 16px"><div class="ptop"><span class="ring">' + av(u, 68) + '</span>' +
         (j.is_me ? '<a class="pill" href="/settings">Edit page</a>' : (me ? followBtn(u, j.is_following) : '<a class="pill solid" href="/login?next=/' + esc(u.handle) + '">Follow</a>')) + '</div>';
-      h += '<div><h1>' + esc(u.name) + '</h1><div class="mono accent" style="font-size:12px;margin-top:2px">rsvp.fm/' + esc(u.handle) + (u.ambassador ? ' · AMBASSADOR' : '') + '</div></div>';
+      h += '<div><h1>' + esc(u.name) + '</h1><div class="mono muted" style="font-size:12px;margin-top:4px">rsvp.fm/' + esc(u.handle) + (u.ambassador ? ' · AMBASSADOR' : '') + '</div></div>';
       if (u.bio) h += '<p class="txt" style="font-size:14px">' + esc(u.bio) + '</p>';
       h += '<div class="stats"><span><strong>' + j.followers + '</strong> followers</span><span><strong>' + j.following + '</strong> following</span><span>' + esc(kindLabel(u.kind)) + (u.city ? ' · ' + esc(u.city) : '') + '</span></div></div>';
       if (j.is_me) h += '<div id="mine"></div>';
@@ -246,7 +246,7 @@
         h += '<form id="f-wall" data-handle="' + esc(u.handle) + '"><div class="field"><label for="walltext">' +
           (isMe ? 'Write on your own wall' : 'Write on ' + esc(u.name) + '\'s wall') + '</label>' +
           '<textarea id="walltext" name="text" rows="2" maxlength="500" required placeholder="' + (isMe ? 'Pin a note for visitors' : 'Say something. Everyone can read it.') + '"></textarea></div>' +
-          '<p class="err" id="err" hidden></p><div class="acts"><button class="pill on" type="submit">Post on the wall</button><span class="small">Public</span></div></form>';
+          '<p class="err" id="err" hidden></p><div class="acts"><button class="pill solid" type="submit">Post on the wall</button><span class="small">Public</span></div></form>';
       } else {
         h += '<p class="small" style="margin:0"><a class="accent" href="/login?next=/' + esc(u.handle) + '">Log in</a> to write on this wall.</p>';
       }
@@ -264,7 +264,7 @@
   function renderMine(el) {
     Promise.all([api('GET', '/me/referrals'), api('GET', '/me/nights')]).then(function (r) {
       var ref = r[0], nights = r[1].events, h = '<div class="gut" style="padding-block:0 16px;display:flex;flex-direction:column;gap:16px">';
-      h += '<section class="box" style="border-color:var(--accent)"><span class="label accent">Referrals</span><span style="font-size:28px;font-weight:800">' + money(ref.total_cents, 'EUR') + '</span>' +
+      h += '<section class="box" style="border-color:var(--fg)"><span class="label">Referrals</span><span style="font-size:28px;font-weight:800">' + money(ref.total_cents, 'EUR') + '</span>' +
         '<span class="small">' + ref.total_referred + ' people came through your links' + (ref.total_cents ? ' · estimated, paid by hosts' : '') + '</span></section>';
       h += '<section style="display:flex;flex-direction:column;gap:4px"><h2>Your nights</h2>';
       if (nights.length) nights.forEach(function (e) { h += evRow(e, fmtDate(e.starts_at) + ' · ' + (e.city || e.venue)); });
@@ -293,7 +293,7 @@
       if (me && e.entry === 'ticket' && e.commission_pct) {
         h += '<section class="ref"><span style="font-weight:700;font-size:15px">Earn ' + e.commission_pct + '% on every ticket sold through your link</span>' +
           '<span class="small" style="overflow-wrap:anywhere">' + esc(shareLink(e.id).replace(/^https?:\/\//, '')) + '</span>' +
-          '<button class="pill" style="align-self:flex-start;border-color:var(--accent);color:var(--accent)" data-act="share" data-id="' + esc(e.id) + '">Copy my link</button></section>';
+          '<button class="pill" style="align-self:flex-start" data-act="share" data-id="' + esc(e.id) + '">Copy my link</button></section>';
       } else {
         h += '<div><button class="pill" data-act="share" data-id="' + esc(e.id) + '">Copy link</button></div>';
       }
@@ -324,7 +324,7 @@
     header({ title: 'New post' }); setTab('new');
     var h = '<div class="gut section"><form id="f-post"><div class="field"><label for="text">Post to your followers</label>' +
       '<textarea id="text" name="text" rows="6" maxlength="500" placeholder="What\'s on tonight?" required></textarea></div>' +
-      '<p class="err" id="err" hidden></p><div class="acts"><button class="pill big on" type="submit">Post</button></div></form>' +
+      '<p class="err" id="err" hidden></p><div class="acts"><button class="pill big solid" type="submit">Post</button></div></form>' +
       '<p class="small">Your posts appear in your followers\' feeds in order. No algorithm.</p>';
     if (me.kind !== 'member') h += '<div class="sep" style="padding-top:16px"><a class="pill" href="/new/event">Announce a night instead</a></div>';
     else h += '<p class="small sep" style="padding-top:16px;margin:0">Label, promoter or artist? Switch your page type in <a class="accent" href="/settings">Settings</a> to announce nights.</p>';
@@ -363,7 +363,7 @@
       '<div class="field"><label for="about">About</label><textarea id="about" name="about" rows="4" maxlength="1000"></textarea></div>' +
       '<fieldset><legend class="field">Color</legend>' + swatches('color', me.color) + '</fieldset>' +
       '<div class="field"><label for="announce">Announcement post (optional)</label><textarea id="announce" name="announce" rows="3" maxlength="500" placeholder="Same big top, same hours, nothing else revealed."></textarea></div>' +
-      '<p class="err" id="err" hidden></p><div class="acts"><button class="pill big on" type="submit">Publish the night</button></div></form></div>';
+      '<p class="err" id="err" hidden></p><div class="acts"><button class="pill big solid" type="submit">Publish the night</button></div></form></div>';
     var form = document.getElementById('f-event');
     form.addEventListener('change', function () {
       document.getElementById('ticket-fields').hidden = form.entry.value !== 'ticket';
@@ -411,7 +411,7 @@
       j.accounts.forEach(function (a) {
         h += '<button class="row" ' + (a.current ? 'disabled style="opacity:1"' : 'data-act="switchto" data-id="' + esc(a.handle) + '"') + '>' + av(a, 44) +
           '<span style="display:flex;flex-direction:column;min-width:0;flex:1"><span class="name">' + esc(a.name) + '</span><span class="meta">@' + esc(a.handle) + ' · ' + esc(kindLabel(a.kind)) + '</span></span>' +
-          (a.current ? '<span class="accent mono" style="font-size:11px">CURRENT</span>' : '<span class="small">Switch</span>') + '</button>';
+          (a.current ? '<span class="mono" style="font-size:11px">CURRENT</span>' : '<span class="small">Switch</span>') + '</button>';
       });
       h += '</div></div>';
       h += '<div class="gut section sep"><a class="pill" href="/settings#create" style="align-self:flex-start">Create a new page</a></div>';
@@ -428,7 +428,7 @@
     header({ title: 'Activate' }); setTab(''); loading();
     api('GET', '/claim/' + token).then(function (j) {
       main.innerHTML = '<div class="gut section"><div style="display:flex;align-items:center;gap:12px">' + av(j.user, 56) +
-        '<div><h1>' + esc(j.user.name) + '</h1><div class="mono accent" style="font-size:12px">rsvp.fm/' + esc(j.user.handle) + '</div></div></div>' +
+        '<div><h1>' + esc(j.user.name) + '</h1><div class="mono muted" style="font-size:12px">rsvp.fm/' + esc(j.user.handle) + '</div></div></div>' +
         '<p class="small" style="margin:0">This page was created for ' + esc(j.email) + '. Choose a password to take it over.</p>' +
         '<form id="f-claim" data-token="' + esc(token) + '"><div class="field"><label for="cpass">Password</label><input id="cpass" name="password" type="password" minlength="8" autocomplete="new-password" required></div>' +
         '<p class="err" id="err" hidden></p><button class="pill big solid" type="submit">Activate my page</button></form></div>';
@@ -506,7 +506,7 @@
       if (!j.unlimited) {
         var pct = Math.min(100, Math.round(100 * j.used / Math.max(1, j.quota)));
         h += '<div style="display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between" class="small"><span>' + j.used + ' joined</span><span><strong style="color:var(--fg)">' + j.remaining + '</strong> left of ' + j.quota + '</span></div>' +
-          '<div style="height:6px;border-radius:3px;background:var(--line);overflow:hidden"><div style="height:100%;width:' + pct + '%;background:var(--accent)"></div></div></div>';
+          '<div style="height:4px;background:var(--line);overflow:hidden"><div style="height:100%;width:' + pct + '%;background:var(--fg)"></div></div></div>';
         if (j.remaining === 0) h += '<p class="small" style="margin:0">Your link is used up. We\'ll be in touch.</p>';
       } else h += '<p class="small" style="margin:0">' + j.used + ' joined through your link.</p>';
       if (j.joined.length) {
@@ -519,7 +519,7 @@
   }
   function personRow(u, actions) {
     return '<div class="row" style="gap:12px"><a href="/' + esc(u.handle) + '" style="display:flex;align-items:center;gap:10px;min-width:0;flex:1">' + av(u, 36) +
-      '<span style="min-width:0"><span class="name">' + esc(u.name) + (u.ambassador ? ' <span class="accent mono" style="font-size:11px">AMBASSADOR</span>' : '') + '</span>' +
+      '<span style="min-width:0"><span class="name">' + esc(u.name) + (u.ambassador ? ' <span class="mono muted" style="font-size:11px">AMBASSADOR</span>' : '') + '</span>' +
       '<span class="meta">@' + esc(u.handle) + ' · ' + u.used + ' joined · ' + u.remaining + ' left · ' + esc(u.email) + '</span></span></a>' + actions + '</div>';
   }
   function loadAmbassadors() {
