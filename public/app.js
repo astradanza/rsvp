@@ -166,11 +166,23 @@
   // ---------- views ----------
   function viewWelcome() {
     header({}); setTab('');
+    function step(n, title, text) {
+      return '<div style="display:grid;grid-template-columns:44px minmax(0,1fr);gap:4px 12px;padding-block:18px;border-top:1px solid var(--line)">' +
+        '<span class="mono muted" style="font-size:12px;padding-top:3px">' + n + '</span><h2>' + title + '</h2>' +
+        '<span></span><p class="txt" style="color:var(--muted)">' + text + '</p></div>';
+    }
     main.innerHTML = '<section class="hero gut">' +
-      '<h1>Updates from artists &amp; labels.</h1>' +
-      '<p>Follow the artists, labels and promoters you love, and hear from them directly: new records, new nights, nothing else. No ads, no algorithm, in the order they post. RSVP in one tap.</p>' +
+      '<span class="label">rsvp.fm</span>' +
+      '<h1>See you there.</h1>' +
+      '<p>A place made for meeting in real life. Follow the artists, labels and promoters you love, know where they play next, and be there.</p>' +
       '<div class="acts" style="flex-wrap:wrap"><a class="pill big solid" href="/signup">Join</a><a class="pill big" href="/login">Log in</a></div></section>' +
-      '';
+      '<section class="gut" style="padding-block:8px 24px">' +
+      step('01', 'Follow', 'The artists, labels and promoters you love. Their news and their nights, in the order they post. Nothing else.') +
+      step('02', 'Get in', 'One tap: I\'m going. Guestlists and friends &amp; family tickets come straight from the people who run the night.') +
+      step('03', 'Meet', 'See which friends are going, then put your phone away. The point is the dance floor, not the feed.') +
+      '</section>' +
+      '<section class="gut" style="padding-block:20px 40px;border-top:1px solid var(--line)">' +
+      '<p class="mono" style="margin:0;font-size:13px;line-height:1.8">No ads.<br>No algorithm.<br>No follower counts.<br>Less scrolling, more rendezvous.</p></section>';
   }
 
   function viewFeed() {

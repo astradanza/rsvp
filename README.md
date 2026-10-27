@@ -1,6 +1,6 @@
 # rsvp.fm
 
-Updates from artists & labels: a clean, curated channel to follow the artists, labels and promoters you love. No ads, no algorithm, free.
+See you there. A place made for meeting in real life: follow the artists, labels and promoters you love, know where they play next, and be there. No ads, no algorithm, no follower counts, free.
 
 Money features (ticket sales, referral commissions, amounts owed to referrers) are built but hidden at launch: set `MONEY = true` at the top of `public/app.js` to show them.
 Pages at `rsvp.fm/handle`, a chronological feed, an Activity page, events with guestlists and friends & family tickets, reposts, and referral links that credit whoever brought a guest.
