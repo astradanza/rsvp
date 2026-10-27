@@ -368,7 +368,8 @@
         if (e.gl_on) h += linkBox('Guestlist link', base + e.gl_token, (e.visibility === 'private' ? 'Private event: only people with a link can see it.' : 'Public event: members can also join from the page.') + (e.allow_requests ? ' Requests are on.' : ''));
         if (e.ff_on) h += linkBox('Friends & family link', base + e.ff_token, 'Whoever opens it gets a friends & family ticket.' + (e.ff_requests ? ' Requests are on.' : ''));
         if (!e.gl_on && !e.ff_on) h += '<p class="small" style="margin:0">Guestlist and friends &amp; family are both off. Turn one on in Edit.</p>';
-        h += '<div class="acts"><a class="pill" href="/e/' + esc(e.id) + '/edit">Edit</a><button class="pill ghost" data-act="delevent" data-id="' + esc(e.id) + '">Delete</button></div><div id="guests"></div>';
+        h += '<div class="acts" style="flex-wrap:wrap"><a class="pill solid" href="/e/' + esc(e.id) + '/door">Door</a><button class="pill" data-act="exportcsv" data-id="' + esc(e.id) + '">Export CSV</button>' +
+          '<a class="pill" href="/e/' + esc(e.id) + '/edit">Edit</a><button class="pill ghost" data-act="delevent" data-id="' + esc(e.id) + '">Delete</button></div><div id="guests"></div>';
       }
       main.innerHTML = h + '</div>';
       if (e.is_host) renderGuests(e, document.getElementById('guests'));
@@ -476,6 +477,56 @@
     var q = new URLSearchParams(location.search), v = {};
     q.forEach(function (val, key) { v[key] = val; });
     main.innerHTML = eventForm(v, null);
+  }
+
+  // Door mode: one list of everyone (all lists), search, tap to check in.
+  function doorEntries(j) {
+    var out = [];
+    j.guests.forEach(function (g) { out.push({ kind: 'member', key: g.handle, name: g.name, sub: '@' + g.handle, list: g.list || 'gl', at: g.checked_in_at || '', user: g }); });
+    j.requests.filter(function (r) { return r.status === 'approved'; }).forEach(function (r) {
+      out.push({ kind: 'request', key: String(r.id), name: r.name, sub: r.email + (r.note ? ' · ' + r.note : ''), list: r.list || 'gl', at: r.checked_in_at || '' });
+    });
+    out.sort(function (a, b) { return a.name.localeCompare(b.name); });
+    return out;
+  }
+  function viewDoor(id) {
+    if (!me) return needLogin();
+    header({ back: true, title: 'Door' }); setTab(''); loading();
+    Promise.all([api('GET', '/events/' + encodeURIComponent(id)), api('GET', '/events/' + encodeURIComponent(id) + '/guests')]).then(function (r) {
+      var e = r[0].event, list = doorEntries(r[1]);
+      header({ back: true, title: 'Door · ' + (e.caption || e.title).split('\n')[0] });
+      main.innerHTML = '<div class="gut section"><div class="field"><label for="door-q">Search the list</label><input id="door-q" type="search" autocomplete="off" autocapitalize="none" placeholder="Name, @handle or email"></div><div id="door-list"></div></div>';
+      function draw() {
+        var q = (document.getElementById('door-q').value || '').toLowerCase().trim();
+        var rows = list.filter(function (x) { return !q || (x.name + ' ' + x.sub).toLowerCase().indexOf(q) >= 0; });
+        document.getElementById('door-list').innerHTML = rows.map(function (x) {
+          return '<button class="row" style="gap:12px;' + (x.at ? 'opacity:.55' : '') + '" data-act="checkin" data-kind="' + x.kind + '" data-id="' + esc(x.key) + '" data-ev="' + esc(id) + '" data-on="' + (x.at ? 1 : 0) + '">' +
+            '<span style="width:28px;height:28px;border:1px solid var(--fg);border-radius:var(--r);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-weight:800">' + (x.at ? '✓' : '') + '</span>' +
+            '<span style="display:flex;flex-direction:column;min-width:0;flex:1"><span class="name">' + esc(x.name) + '</span><span class="meta" style="overflow-wrap:anywhere">' + esc(x.sub) + '</span></span>' +
+            '<span class="small">' + (LISTS[x.list] || '') + '</span></button>';
+        }).join('') || '<p class="small">No one matches.</p>';
+      }
+      document.getElementById('door-q').addEventListener('input', draw);
+      draw();
+      viewDoor.list = list; viewDoor.draw = draw;
+    }).catch(showError);
+  }
+  function csvCell(v) { v = String(v == null ? '' : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+  function exportCsv(id) {
+    Promise.all([api('GET', '/events/' + encodeURIComponent(id)), api('GET', '/events/' + encodeURIComponent(id) + '/guests')]).then(function (r) {
+      var e = r[0].event, j = r[1];
+      var rows = [['Name', 'Handle', 'Email', 'List', 'Status', 'Brought by', 'Note', 'Checked in']];
+      j.guests.forEach(function (g) { rows.push([g.name, '@' + g.handle, '', LISTS[g.list || 'gl'], 'confirmed', g.ref_handle ? '@' + g.ref_handle : '', '', g.checked_in_at || '']); });
+      j.requests.forEach(function (q) { rows.push([q.name, '', q.email, LISTS[q.list || 'gl'], q.status === 'approved' ? 'confirmed' : 'pending', '', q.note, q.checked_in_at || '']); });
+      var csv = rows.map(function (row) { return row.map(csvCell).join(','); }).join('\n');
+      var blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'rsvp-' + ((e.caption || e.title).split('\n')[0].toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || e.id) + '.csv';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+      say('Guestlist exported.');
+    }).catch(function (err) { say(err.message); });
   }
 
   function viewEditEvent(id) {
@@ -670,6 +721,7 @@
     if (p === '/switch') return viewSwitch();
     if (p === '/settings') return viewSettings();
     if ((m = /^\/e\/([a-z0-9]+)\/edit$/i.exec(p))) return viewEditEvent(m[1]);
+    if ((m = /^\/e\/([a-z0-9]+)\/door$/i.exec(p))) return viewDoor(m[1]);
     if ((m = /^\/e\/([a-z0-9]+)$/i.exec(p))) return viewEvent(m[1]);
     if ((m = /^\/@?([a-z0-9_]{2,24})$/i.exec(p))) return viewProfile(m[1].toLowerCase());
     header({}); setTab(''); main.innerHTML = '<div class="end">Nothing here.<br><br><a class="pill" href="/">Back home</a></div>';
@@ -688,6 +740,7 @@
     if (act === 'copyinvite') return copy(inviteUrl(id));
     if (act === 'copyclaim') return copy(location.origin + '/claim/' + id);
     if (act === 'copylink') return copy(id);
+    if (act === 'exportcsv') return exportCsv(id);
     if (!me) return needLogin();
     b.disabled = true;
     var done = function () { b.disabled = false; };
@@ -724,6 +777,13 @@
     } else if (act === 'unlink') {
       if (b.getAttribute('data-confirm') !== '1') { b.setAttribute('data-confirm', '1'); b.textContent = 'Tap again: you will need to log in to switch back'; return done(); }
       api('POST', '/accounts/unlink', {}).then(function () { say('Removed from the group.'); viewSwitch(); }).catch(function (e) { say(e.message); done(); });
+    } else if (act === 'checkin') {
+      var on = b.getAttribute('data-on') !== '1', kind = b.getAttribute('data-kind');
+      api('POST', '/events/' + b.getAttribute('data-ev') + '/checkin', kind === 'request' ? { kind: 'request', id: id, on: on } : { kind: 'member', handle: id, on: on }).then(function (j) {
+        (viewDoor.list || []).forEach(function (x) { if (x.kind === kind && x.key === id) x.at = j.checked_in_at; });
+        if (viewDoor.draw) viewDoor.draw();
+        say(on ? 'Checked in.' : 'Check-in undone.');
+      }).catch(function (e) { say(e.message); done(); });
     } else if (act === 'reqlist') {
       var rk = ''; try { rk = sessionStorage.getItem('k:' + id) || ''; } catch (e) {}
       api('POST', '/events/' + id + '/request', { list: b.getAttribute('data-list'), k: rk }).then(function () { say('Request sent. The host will confirm.'); route(); }).catch(function (e) { say(e.message); done(); });

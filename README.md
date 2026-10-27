@@ -17,7 +17,9 @@ Runs entirely on Cloudflare: one Worker (API + static app) and one D1 database.
 - Posts and reposts. Members can post; anyone can repost.
 - Events (labels, promoters, artists): an image, a caption, an optional start and end (date and time). Public (announced to followers, listed on the page and in Discover) or private (only reachable with the guestlist link). Each event has two lists, each switched on or off by the host: the guestlist and friends & family tickets. Each list has its own link (`rsvp.fm/e/id?k=…`): members who open it are on that list in one tap. Separately, any member can tap "I'm going" on an event they can see. Requests can be allowed per list: members ask in one tap, people without an account leave a name, email and note; the host accepts or declines. No counters anywhere: no follower counts, no "going" counts.
 - Share links carry `?ref=handle`; the guestlist records who brought whom.
-- Host view on each event: the guestlist link, requests to accept or decline, and the guestlist with who brought whom.
+- Host view on each event: the list links, requests to accept or decline, and the lists with who brought whom.
+- Door mode (`/e/id/door`): everyone on every list in one searchable list; tap to check someone in, tap again to undo.
+- Export CSV: name, handle, email (only for people who requested without an account), list, status, brought by, note, checked in.
 - Member view: nights you're going to, people you brought, estimated commission.
 - Admin: unlimited invite link, single-use codes, feature pages in Discover.
 - Anyone can create a page (a label, a party series, an artist project, or a page for a partner). Each page uses one invite. Pages you create are linked to your account; switch between linked accounts from your page, like on Instagram. You can also link an existing account by logging in to it once. A page made for someone else gets an activation link (`rsvp.fm/claim/…`); once activated it leaves your accounts.

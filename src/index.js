@@ -23,11 +23,13 @@ const ADDED_COLUMNS = [
   ['events', 'ff_on', 'INTEGER NOT NULL DEFAULT 0'],
   ['events', 'ff_requests', 'INTEGER NOT NULL DEFAULT 0'],
   ['events', 'ff_token', "TEXT NOT NULL DEFAULT ''"],
-  ['rsvps', 'list', "TEXT NOT NULL DEFAULT 'gl'"]
+  ['rsvps', 'list', "TEXT NOT NULL DEFAULT 'gl'"],
+  ['rsvps', 'checked_in_at', "TEXT NOT NULL DEFAULT ''"]
 ];
 // Columns on tables that ensureSchema creates itself, added after those tables exist.
 const LATE_COLUMNS = [
-  ['guest_requests', 'list', "TEXT NOT NULL DEFAULT 'gl'"]
+  ['guest_requests', 'list', "TEXT NOT NULL DEFAULT 'gl'"],
+  ['guest_requests', 'checked_in_at', "TEXT NOT NULL DEFAULT ''"]
 ];
 async function addMissingColumns(env, list) {
   const cols = {};
@@ -876,13 +878,27 @@ async function api(request, env, url) {
       }
       return json({ ok: true, status });
     }
+    // Door check-in: the host (or anyone they are logged in as) ticks people off the list.
+    if (seg[2] === 'checkin' && method === 'POST') {
+      if (!isHost) fail(403, 'Only the host can check people in.');
+      const b = await body(request);
+      const at = b.on === false ? '' : new Date().toISOString().slice(0, 16).replace('T', ' ');
+      if (b.kind === 'request') {
+        await env.DB.prepare(`UPDATE guest_requests SET checked_in_at = ? WHERE id = ? AND event_id = ? AND status = 'approved'`).bind(at, Number(b.id), ev.id).run();
+      } else {
+        const u = await userByHandle(env, b.handle || '');
+        if (!u) fail(404, 'No one has that handle.');
+        await env.DB.prepare('UPDATE rsvps SET checked_in_at = ? WHERE event_id = ? AND user_id = ?').bind(at, ev.id, u.id).run();
+      }
+      return json({ checked_in_at: at });
+    }
     if (seg[2] === 'guests' && method === 'GET') {
       if (!isHost) fail(403, 'Only the host can see the guestlist.');
       const requests = (await env.DB.prepare(
-        `SELECT id, name, email, note, status, list, created_at FROM guest_requests WHERE event_id = ? AND status != 'declined' ORDER BY created_at`
+        `SELECT id, name, email, note, status, list, checked_in_at, created_at FROM guest_requests WHERE event_id = ? AND status != 'declined' ORDER BY created_at`
       ).bind(ev.id).all()).results;
       const guests = (await env.DB.prepare(
-        `SELECT u.handle, u.name, u.color, u.avatar, r.list, r.created_at, ref.handle AS ref_handle, ref.name AS ref_name
+        `SELECT u.handle, u.name, u.color, u.avatar, r.list, r.checked_in_at, r.created_at, ref.handle AS ref_handle, ref.name AS ref_name
          FROM rsvps r JOIN users u ON u.id = r.user_id LEFT JOIN users ref ON ref.id = r.referrer_id
          WHERE r.event_id = ? ORDER BY r.created_at`
       ).bind(ev.id).all()).results;
