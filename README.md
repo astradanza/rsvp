@@ -9,9 +9,10 @@ Runs entirely on Cloudflare: one Worker (API + static app) and one D1 database.
 
 ## What works today
 
-- Open sign-up: no invite code needed. The very first account becomes the admin. Every member still has a personal invite link (`rsvp.fm/i/code`, 10 sign-ups): people who join through it are credited to the member and follow each other; the member sees who joined and how many are left.
+- By invitation only. The very first account becomes the admin; after that you get in through a personal invite link (`rsvp.fm/i/code`, 10 sign-ups), an admin single-use code, or an event's guestlist / friends & family link. The invite page says who invited you ("Deeplabel invited you to join their community and enjoy special invitations (guestlist, friends & family tickets and more)"); an event link says "… invited you to join the guestlist on Sat 12 Dec", asks you to confirm your name, puts you on the list and makes you follow the host. You always follow whoever invited you; a friend (Guest account) follows you back, artists, labels and clubs don't.
 - Ambassadors: admins see members running low on invites (2 or fewer left) on their feed and in Settings, and can make them ambassadors (50 invites) or top them up by 10.
-- Pages `rsvp.fm/handle` with color, bio, city, Top 8, upcoming nights, posts, and a public wall: any member can write on it, the author or the page owner can delete.
+- Page types: Guest, Artist, Label / Promoter, Club.
+- Pages `rsvp.fm/handle` with color, bio, city, upcoming and past events, where you've been (events you were on the list for), the artists, labels & promoters and clubs you follow (your favorites when you've starred some: ☆ on their page), friends, posts, and a public wall: any member can write on it, the author or the page owner can delete.
 - Change your handle from Settings. Old handles keep redirecting to you (pages and referral links don't break) and can't be taken by anyone else.
 - Search (magnifier at the top of the feed, `/search`): people and pages by name, @handle or city, plus public upcoming events.
 - Suggestions: "Suggested for you" at the top of the feed and on the search page — people followed by the people you follow ("Followed by A and B"), then artists and labels. No ranking algorithm, just your network.

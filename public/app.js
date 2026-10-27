@@ -14,7 +14,7 @@
 
   // ---------- helpers ----------
   // Page types: stored as member / artist / promoter, shown as Guest / Artist / Label / Promoter.
-  var KINDS = { member: 'Guest', artist: 'Artist', promoter: 'Label / Promoter' };
+  var KINDS = { member: 'Guest', artist: 'Artist', promoter: 'Label / Promoter', club: 'Club' };
   function kindLabel(k) { return KINDS[k] || k; }
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -140,6 +140,9 @@
       '<span style="display:flex;flex-direction:column;gap:2px;min-width:0"><span class="name" style="font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc((e.caption || e.title).split('\n')[0]) + '</span>' +
       '<span class="meta">' + esc(line) + '</span></span></a>';
   }
+  function favBtn(u, on) {
+    return '<button class="pill' + (on ? ' on' : '') + '" data-act="fav" data-id="' + esc(u.handle) + '" data-on="' + (on ? 1 : 0) + '" aria-label="' + (on ? 'Remove from favorites' : 'Add to favorites') + '">' + (on ? '★' : '☆') + '</button>';
+  }
   function followBtn(u, on) {
     return '<button class="pill' + (on ? '' : ' solid') + '" data-act="follow" data-id="' + esc(u.handle) + '" data-on="' + (on ? 1 : 0) + '">' + (on ? 'Following' : 'Follow') + '</button>';
   }
@@ -149,7 +152,7 @@
     else h += '<a class="logo" href="/">rsvp<b>.fm</b></a>' + (opts.title ? '<span class="htitle muted" style="margin-left:8px">' + esc(opts.title) + '</span>' : '');
     h += '<span class="hright">';
     if (opts.right) h += opts.right;
-    else if (!me) h += '<a class="pill ghost" href="/login">Log in</a><a class="pill solid" href="/signup">Join</a>';
+    else if (!me) h += '<a class="pill ghost" href="/login">Log in</a>';
     hdr.innerHTML = h + '</span>';
   }
   function setTab(name) {
@@ -176,10 +179,11 @@
       '<span class="label">rsvp.fm</span>' +
       '<h1>See you there.</h1>' +
       '<p>A place made for meeting in real life. Follow the artists, labels and promoters you love, know where they play next, and be there.</p>' +
-      '<div class="acts" style="flex-wrap:wrap"><a class="pill big solid" href="/signup">Join</a><a class="pill big" href="/login">Log in</a></div></section>' +
+      '<div class="acts" style="flex-wrap:wrap"><a class="pill big solid" href="/login">Log in</a></div>' +
+      '<p class="mono" style="margin:0;font-size:12px;color:var(--muted)">By invitation only. Get the link from an artist, a club, a label or a friend.</p></section>' +
       '<section class="gut" style="padding-block:8px 24px">' +
-      step('01', 'Follow', 'The artists, labels and promoters you love. Their news and their nights, in the order they post. Nothing else.') +
-      step('02', 'Get in', 'One tap: I\'m going. Guestlists and friends &amp; family tickets come straight from the people who run the night.') +
+      step('01', 'Get invited', 'An artist, a club, a label or a friend sends you their link. You join their community and follow them. That\'s the only way in.') +
+      step('02', 'Get in', 'Guestlists, friends &amp; family tickets and other special invitations, straight from the people who run the night.') +
       step('03', 'Meet', 'See which friends are going, then put your phone away. The point is the dance floor, not the feed.') +
       '</section>' +
       '<section class="gut" style="padding-block:20px 40px;border-top:1px solid var(--line)">' +
@@ -328,7 +332,7 @@
       if (u.banner && /^\/api\/img\//.test(u.banner)) h += '<div class="banner" style="height:160px;background:' + esc(u.color) + ' url(' + esc(u.banner) + ') center/cover no-repeat"></div>';
       else h += '<div class="banner" style="background:' + esc(u.color) + '"><div style="position:absolute;width:120px;height:120px;border-radius:50%;border:3px solid var(--ink);right:24px;top:-40px"></div><div style="position:absolute;width:40px;height:40px;border-radius:50%;background:var(--ink);right:140px;top:40px"></div></div>';
       h += '<div class="gut" style="display:flex;flex-direction:column;gap:10px;padding-block:0 16px"><div class="ptop"><span class="ring">' + av(u, 68) + '</span>' +
-        (j.is_me ? '<a class="pill" href="/settings">Edit page</a>' : (me ? followBtn(u, j.is_following) : '<a class="pill solid" href="/login?next=/' + esc(u.handle) + '">Follow</a>')) + '</div>';
+        (j.is_me ? '<a class="pill" href="/settings">Edit page</a>' : (me ? '<span style="display:flex;gap:8px">' + (u.kind !== 'member' ? favBtn(u, j.is_favorite) : '') + followBtn(u, j.is_following) + '</span>' : '<a class="pill solid" href="/login?next=/' + esc(u.handle) + '">Follow</a>')) + '</div>';
       h += '<div><h1>' + esc(u.name) + '</h1><div class="mono muted" style="font-size:12px;margin-top:4px">rsvp.fm/' + esc(u.handle) + (u.ambassador ? ' · AMBASSADOR' : '') + '</div></div>';
       if (u.bio) h += '<p class="txt" style="font-size:14px">' + esc(u.bio) + '</p>';
       h += '<div class="stats"><span>' + esc(kindLabel(u.kind)) + (u.city ? ' · ' + esc(u.city) : '') + '</span></div></div>';
@@ -339,11 +343,27 @@
         h += '</div></section>';
       }
       if (j.is_me && u.kind !== 'member') h += '<div class="gut" style="padding-block:0 16px"><a class="pill" href="/new/event">New event</a></div>';
-      if (j.top8.length) {
-        h += '<section class="gut section sep"><h2>Top 8</h2><div class="grid4">';
-        j.top8.forEach(function (f) { h += '<a class="g" href="/' + esc(f.handle) + '">' + av(f, 56) + '<span>' + esc(f.name) + '</span></a>'; });
+      if (j.past.length) {
+        h += '<section class="gut section sep"><h2>Past events</h2><div>';
+        j.past.forEach(function (e) { h += evRow(e, whenLine(e)); });
         h += '</div></section>';
       }
+      if (j.attended.length) {
+        h += '<section class="gut section sep"><h2>' + (j.is_me ? 'Where you\'ve been' : 'Where ' + esc(u.name) + ' has been') + '</h2><div>';
+        j.attended.forEach(function (e) { h += evRow(e, '@' + e.host.handle + ' · ' + fmtDate(e.starts_at)); });
+        h += '</div></section>';
+      }
+      // Who they follow, by kind. Favorites when there are some, otherwise the latest follows. No counts.
+      [['artist', 'artists', 'Artists'], ['promoter', 'labels &amp; promoters', 'Labels &amp; promoters'], ['club', 'clubs', 'Clubs'], ['member', '', 'Friends']].forEach(function (g) {
+        var all = j.following.filter(function (f) { return f.kind === g[0]; });
+        if (!all.length) return;
+        var favs = all.filter(function (f) { return f.favorite; });
+        var list = (favs.length ? favs : all).slice(0, 8);
+        var title = g[0] === 'member' ? 'Friends' : favs.length ? 'Favorite ' + g[1] : g[2] + ' followed';
+        h += '<section class="gut section sep"><h2>' + title + '</h2><div class="grid4">';
+        list.forEach(function (f) { h += '<a class="g" href="/' + esc(f.handle) + '">' + av(f, 56) + '<span>' + esc(f.name) + '</span></a>'; });
+        h += '</div>' + (j.is_me && g[0] !== 'member' && !favs.length ? '<p class="small" style="margin:0">Tap ☆ on a page to make it a favorite.</p>' : '') + '</section>';
+      });
       h += '<section class="gut section sep" id="wall" data-handle="' + esc(u.handle) + '"><h2>Wall</h2><p class="small" style="margin:0">Loading…</p></section>';
       h += '<div class="sep"><div class="gut" style="padding-top:16px"><h2>Posts</h2></div>';
       j.posts.forEach(function (p) { h += postHtml(p); });
@@ -415,7 +435,22 @@
       var canFf = e.ff_on && (kl === 'ff' || e.is_host);
       var reqGl = e.gl_on && e.allow_requests && !canGl;
       var reqFf = e.ff_on && e.ff_requests && !canFf;
-      if (me) {
+      var listName = kl === 'ff' ? 'friends &amp; family list' : 'guestlist';
+      var invText = esc(e.host.name) + ' invited you to join the ' + listName + (e.starts_at ? ' on ' + esc(fmtDate(e.starts_at)) : '') + '.';
+      if (me && kl && !e.is_host && e.my_list !== kl && e.my_list !== 'ff') {
+        // Invitation through the host's link: confirm your name, you're on the list and you follow the host.
+        h += '<section class="box" style="border-color:var(--accent)"><span class="label" style="color:var(--accent)">Invitation</span>' +
+          '<h2 style="font-size:20px;line-height:1.3">' + invText + '</h2>' +
+          '<form id="f-accept" data-id="' + esc(e.id) + '" data-list="' + kl + '" data-k="' + esc(k) + '" data-host="' + esc(e.host.handle) + '">' +
+          '<div class="field"><label for="acc-name">Confirm your name</label><input id="acc-name" name="name" maxlength="60" required value="' + esc(me.name) + '"></div>' +
+          '<p class="err" id="err" hidden></p><button class="pill big solid" type="submit">Confirm and follow @' + esc(e.host.handle) + '</button></form></section>';
+      } else if (!me && kl) {
+        h += '<section class="box" style="border-color:var(--accent)"><span class="label" style="color:var(--accent)">Invitation</span>' +
+          '<h2 style="font-size:20px;line-height:1.3">' + invText + '</h2>' +
+          '<p class="small" style="margin:0">Confirm your name and create your account. You will be on the list and follow ' + esc(e.host.name) + '.</p>' +
+          signupFields('<input type="hidden" name="event" value="' + esc(e.id) + '"><input type="hidden" name="k" value="' + esc(k) + '">') +
+          '<p class="small" style="margin:0">Already a member? <a class="accent" href="/login?next=' + encodeURIComponent(location.pathname + '?k=' + k) + '">Log in</a></p></section>';
+      } else if (me) {
         h += '<div class="acts" style="flex-wrap:wrap">';
         // "I'm going" always comes first; guestlist and friends & family are extras when the host offers them.
         var ml = e.my_list;
@@ -518,7 +553,7 @@
       '<p class="err" id="err" hidden></p><div class="acts"><button class="pill big solid" type="submit">Post</button></div></form>' +
       '<p class="small">Your posts appear in your followers\' feeds in order. No algorithm.</p>';
     if (me.kind !== 'member') h += '<div class="sep" style="padding-top:16px"><a class="pill" href="/new/event">Create an event instead</a></div>';
-    else h += '<p class="small sep" style="padding-top:16px;margin:0">Label, promoter or artist? Switch your page type in <a class="accent" href="/settings">Settings</a> to announce nights.</p>';
+    else h += '<p class="small sep" style="padding-top:16px;margin:0">Artist, label, promoter or club? Switch your page type in <a class="accent" href="/settings">Settings</a> to announce nights.</p>';
     main.innerHTML = h + '</div>';
     document.getElementById('text').focus();
   }
@@ -570,7 +605,7 @@
     if (!me) return needLogin();
     header({ back: true, title: 'New event' }); setTab('new');
     if (me.kind === 'member' && !me.is_admin) {
-      main.innerHTML = '<div class="end">Switch your page to Label / Promoter or Artist in <a class="accent" href="/settings">Settings</a> to create events.</div>';
+      main.innerHTML = '<div class="end">Switch your page to Artist, Label / Promoter or Club in <a class="accent" href="/settings">Settings</a> to create events.</div>';
       return;
     }
     var q = new URLSearchParams(location.search), v = {};
@@ -645,29 +680,66 @@
       '<div class="field"><label for="login">Handle or email</label><input id="login" name="login" autocomplete="username" autocapitalize="none" required></div>' +
       '<div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required></div>' +
       '<p class="err" id="err" hidden></p><button class="pill big solid" type="submit">Log in</button></form>' +
-      '<p class="small">No account yet? <a class="accent" href="/signup">Join rsvp.fm</a>.</p></div>';
+      '<p class="small">No account yet? rsvp.fm is by invitation: open the link you received.</p></div>';
   }
 
-  function viewSignup() {
-    if (me) return go('/', true);
-    header({ back: true, title: 'Join' }); setTab('');
-    var q = new URLSearchParams(location.search);
-    main.innerHTML = '<div class="gut section"><h1>Claim your rsvp.fm/handle.</h1><form id="f-signup">' +
-      (q.get('invite') ? '<input type="hidden" name="invite" value="' + esc(q.get('invite')) + '"><p class="small" style="margin:0">You were invited. You will follow each other.</p>' : '') +
+  // The sign-up fields, shared by the invite landing page and event invitations.
+  function signupFields(hidden, nameValue) {
+    return '<form id="f-signup">' + hidden +
+      '<div class="field"><label for="name">Your name</label><input id="name" name="name" maxlength="60" autocomplete="name" required value="' + esc(nameValue || '') + '"><span class="small">As it should appear on the list.</span></div>' +
       '<div class="field"><label for="handle">Handle</label><input id="handle" name="handle" autocapitalize="none" pattern="[a-z0-9_]{2,24}" maxlength="24" required placeholder="yourname"><span class="small">rsvp.fm/<span id="hprev">handle</span></span></div>' +
-      '<div class="field"><label for="name">Display name</label><input id="name" name="name" maxlength="60" required></div>' +
       '<fieldset><legend class="field">I am</legend><div class="seg">' +
       '<label><input type="radio" name="kind" value="member" checked><span>Guest</span></label>' +
       '<label><input type="radio" name="kind" value="artist"><span>Artist</span></label>' +
-      '<label><input type="radio" name="kind" value="promoter"><span>Label / Promoter</span></label></div></fieldset>' +
+      '<label><input type="radio" name="kind" value="promoter"><span>Label / Promoter</span></label>' +
+      '<label><input type="radio" name="kind" value="club"><span>Club</span></label></div></fieldset>' +
       '<div class="field"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required></div>' +
       '<div class="field"><label for="password">Password</label><input id="password" name="password" type="password" minlength="8" autocomplete="new-password" required></div>' +
-      '<p class="err" id="err" hidden></p><button class="pill big solid" type="submit">Create my page</button></form></div>';
-    var hi = document.getElementById('handle');
+      '<p class="err" id="err" hidden></p><button class="pill big solid" type="submit">Accept and join</button></form>';
+  }
+  function wireHandle() {
+    var hi = document.getElementById('handle'); if (!hi) return;
     hi.addEventListener('input', function () {
       hi.value = hi.value.toLowerCase().replace(/[^a-z0-9_]/g, '');
       document.getElementById('hprev').textContent = hi.value || 'handle';
     });
+  }
+  function inviterBlock(u, text) {
+    return '<a class="who" href="/' + esc(u.handle) + '" style="gap:12px">' + av(u, 56) + '<span style="min-width:0"><span class="name" style="font-size:17px">' + esc(u.name) + '</span>' +
+      '<span class="meta">@' + esc(u.handle) + ' · ' + esc(kindLabel(u.kind)) + '</span></span></a>' +
+      '<h1 style="font-size:24px;line-height:1.25">' + text + '</h1>';
+  }
+  function invitePerks(u) {
+    return u.kind === 'member' ? 'invited you to rsvp.fm.' : 'invited you to join their community and enjoy special invitations (guestlist, friends &amp; family tickets and more).';
+  }
+  // rsvp.fm/i/code: who invited you, then sign up. You follow them.
+  function viewInviteLanding(code) {
+    header({ title: 'Invitation' }); setTab(''); loading();
+    api('GET', '/invite/' + encodeURIComponent(code)).then(function (j) {
+      var u = j.inviter, h = '<div class="gut section" style="gap:18px">' + inviterBlock(u, esc(u.name) + ' ' + invitePerks(u));
+      if (me) {
+        h += '<p class="small" style="margin:0">You\'re already on rsvp.fm as @' + esc(me.handle) + '.</p><div class="acts">' + followBtn(u, false) + '<a class="pill" href="/' + esc(u.handle) + '">Open their page</a></div>';
+      } else if (!j.valid) {
+        h += '<p class="err">This invitation link has been used up. Ask ' + esc(u.name) + ' for a new one.</p>';
+      } else {
+        h += '<p class="small" style="margin:0">Confirm your name and create your account. You will follow ' + esc(u.name) + '.</p>' +
+          signupFields('<input type="hidden" name="invite" value="' + esc(code) + '">') +
+          '<p class="small" style="margin:0">Already a member? <a class="accent" href="/login?next=' + encodeURIComponent('/i/' + code) + '">Log in</a></p>';
+      }
+      main.innerHTML = h + '</div>';
+      wireHandle();
+    }).catch(showError);
+  }
+  function viewSignup() {
+    if (me) return go('/', true);
+    var q = new URLSearchParams(location.search);
+    if (q.get('invite')) return go('/i/' + q.get('invite').toLowerCase(), true);
+    header({ back: true, title: 'Join' }); setTab('');
+    main.innerHTML = '<div class="gut section"><h1>By invitation only.</h1>' +
+      '<p class="txt" style="color:var(--muted)">rsvp.fm is open to people invited by an artist, a club, a label or a friend. Open the link you received, or enter your invitation code.</p>' +
+      '<form id="f-code"><div class="field"><label for="code">Invitation code</label><input id="code" name="code" autocapitalize="none" autocomplete="off" required></div>' +
+      '<button class="pill big solid" type="submit">Continue</button></form>' +
+      '<p class="small">Already a member? <a class="accent" href="/login">Log in</a></p></div>';
   }
 
   function viewSwitch() {
@@ -728,7 +800,7 @@
       '<div class="field"><label for="bio">Bio</label><textarea id="bio" name="bio" rows="3" maxlength="280">' + esc(me.bio) + '</textarea></div>' +
       '<div class="field"><label for="city">City</label><input id="city" name="city" maxlength="60" value="' + esc(me.city) + '"></div>' +
       '<fieldset><legend class="field">Page type</legend><div class="seg">' +
-      ['member', 'artist', 'promoter'].map(function (k) { return '<label><input type="radio" name="kind" value="' + k + '"' + (me.kind === k ? ' checked' : '') + '><span>' + kindLabel(k) + '</span></label>'; }).join('') +
+      ['member', 'artist', 'promoter', 'club'].map(function (k) { return '<label><input type="radio" name="kind" value="' + k + '"' + (me.kind === k ? ' checked' : '') + '><span>' + kindLabel(k) + '</span></label>'; }).join('') +
       '</div></fieldset><fieldset><legend class="field">Page color</legend>' + swatches('color', me.color) + '</fieldset>' +
       '<p class="err" id="err" hidden></p><button class="pill big solid" type="submit">Save</button></form></div>' +
       '<div class="gut section sep" id="invites"><h2>Your invite link</h2><p class="small" style="margin:0">Loading…</p></div>';
@@ -744,6 +816,7 @@
       '<fieldset><legend class="field">Page type</legend><div class="seg">' +
       '<label><input type="radio" name="kind" value="promoter" checked><span>Label / Promoter</span></label>' +
       '<label><input type="radio" name="kind" value="artist"><span>Artist</span></label>' +
+      '<label><input type="radio" name="kind" value="club"><span>Club</span></label>' +
       '<label><input type="radio" name="kind" value="member"><span>Guest</span></label></div></fieldset>' +
       '<div class="field"><label for="aemail">Email (optional)</label><input id="aemail" name="email" type="email" autocomplete="off"></div>' +
       '<div class="field"><label for="apass">Password (optional, to log in to it directly)</label><input id="apass" name="password" type="password" autocomplete="new-password" minlength="8"></div>' +
@@ -816,7 +889,7 @@
     if (p === '/new/event') return viewNewEvent();
     if (p === '/login') return viewLogin();
     if (p === '/signup' || p === '/invite') return viewSignup();
-    if ((m = /^\/i\/([a-z0-9]+)$/i.exec(p))) return go('/signup?invite=' + m[1].toLowerCase(), true);
+    if ((m = /^\/i\/([a-z0-9]+)$/i.exec(p))) return viewInviteLanding(m[1].toLowerCase());
     if ((m = /^\/claim\/([A-Za-z0-9_-]+)$/.exec(p))) return viewClaim(m[1]);
     if (p === '/switch') return viewSwitch();
     if (p === '/settings') return viewSettings();
@@ -849,6 +922,13 @@
       api(on ? 'DELETE' : 'POST', '/users/' + id + '/follow').then(function () {
         b.setAttribute('data-on', on ? '0' : '1'); b.textContent = on ? 'Follow' : 'Following'; b.classList.toggle('solid', on);
         say(on ? 'Unfollowed @' + id : 'Following @' + id);
+      }).catch(function (e) { say(e.message); }).then(done);
+    } else if (act === 'fav') {
+      var fon = b.getAttribute('data-on') === '1';
+      api(fon ? 'DELETE' : 'POST', '/users/' + id + '/favorite').then(function () {
+        b.setAttribute('data-on', fon ? '0' : '1'); b.textContent = fon ? '☆' : '★'; b.classList.toggle('on', !fon);
+        say(fon ? 'Removed from your favorites.' : 'Added to your favorites.');
+        if (!fon) { var fb = b.parentNode.querySelector('[data-act=follow]'); if (fb) { fb.setAttribute('data-on', '1'); fb.textContent = 'Following'; fb.classList.remove('solid'); } }
       }).catch(function (e) { say(e.message); }).then(done);
     } else if (act === 'rsvp') {
       var going = b.getAttribute('data-going') === '1', ref = null, rlist = b.getAttribute('data-list') || 'going';
@@ -930,7 +1010,18 @@
     if (f.id === 'f-login') {
       api('POST', '/login', d).then(boot).then(function () { go(safeNext, true); }).catch(showErr);
     } else if (f.id === 'f-signup') {
-      api('POST', '/signup', d).then(boot).then(function () { say('Welcome to rsvp.fm.'); go('/' + me.handle, true); }).catch(showErr);
+      var evBack = d.event ? '/e/' + d.event : '';
+      api('POST', '/signup', d).then(boot).then(function () {
+        say(evBack ? 'Welcome. You\'re on the list.' : 'Welcome to rsvp.fm.'); go(evBack || '/', true);
+      }).catch(showErr);
+    } else if (f.id === 'f-code') {
+      go('/i/' + String(d.code || '').trim().toLowerCase().replace(/^.*\/i\//, '').replace(/[^a-z0-9]/g, ''));
+    } else if (f.id === 'f-accept') {
+      var aid = f.getAttribute('data-id');
+      var nm = String(d.name || '').trim();
+      (nm && nm !== me.name ? api('PATCH', '/me', { name: nm }) : Promise.resolve()).then(function () {
+        return api('POST', '/events/' + aid + '/rsvp', { list: f.getAttribute('data-list'), k: f.getAttribute('data-k'), ref: null });
+      }).then(function () { say('Confirmed. You follow @' + f.getAttribute('data-host') + '.'); return boot(); }).then(route).catch(showErr);
     } else if (f.id === 'f-wall') {
       var wh = f.getAttribute('data-handle');
       api('POST', '/wall/' + wh, d).then(function () {

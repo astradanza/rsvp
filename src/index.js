@@ -25,7 +25,9 @@ const ADDED_COLUMNS = [
   ['events', 'ff_requests', 'INTEGER NOT NULL DEFAULT 0'],
   ['events', 'ff_token', "TEXT NOT NULL DEFAULT ''"],
   ['rsvps', 'list', "TEXT NOT NULL DEFAULT 'gl'"],
-  ['rsvps', 'checked_in_at', "TEXT NOT NULL DEFAULT ''"]
+  ['rsvps', 'checked_in_at', "TEXT NOT NULL DEFAULT ''"],
+  // Favorite artists, labels and clubs shown on a profile
+  ['follows', 'favorite', 'INTEGER NOT NULL DEFAULT 0']
 ];
 // Columns on tables that ensureSchema creates itself, added after those tables exist.
 const LATE_COLUMNS = [
@@ -404,6 +406,17 @@ async function api(request, env, url) {
     return json({ user: { ...publicUser(me), email: me.email, is_admin: !!me.is_admin }, unread: !!latest && latest.at > (me.notif_seen_at || '') });
   }
   if (path === '/api/signup' && method === 'POST') return signup(request, env, url);
+  // Who sent this invite link (landing page of rsvp.fm/i/code)
+  if (seg[0] === 'invite' && seg[1] && method === 'GET') {
+    const inviter = await env.DB.prepare('SELECT * FROM users WHERE invite_link = ?').bind(String(seg[1]).toLowerCase()).first();
+    if (inviter) {
+      const st = await inviteStats(env, inviter);
+      return json({ inviter: publicUser(inviter), valid: st.unlimited || st.remaining > 0 });
+    }
+    const code = await env.DB.prepare('SELECT i.*, u.handle, u.name, u.kind, u.bio, u.city, u.color, u.featured, u.ambassador, u.avatar, u.banner FROM invites i JOIN users u ON u.id = i.created_by WHERE i.code = ?').bind(String(seg[1]).toLowerCase()).first();
+    if (code) return json({ inviter: publicUser(code), valid: !code.used_by });
+    fail(404, 'This invitation link does not exist.');
+  }
   if (path === '/api/login' && method === 'POST') {
     const b = await body(request);
     const id = str(b.login, 120).toLowerCase().replace(/^@/, '');
@@ -445,7 +458,7 @@ async function api(request, env, url) {
       const b = await body(request);
       const handle = str(b.handle, 24).toLowerCase().replace(/^@/, '');
       const name = str(b.name, 60) || handle;
-      const kind = ['member', 'promoter', 'artist'].includes(b.kind) ? b.kind : 'promoter';
+      const kind = ['member', 'promoter', 'artist', 'club'].includes(b.kind) ? b.kind : 'promoter';
       if (!HANDLE_RE.test(handle)) fail(400, 'Handles use 2 to 24 lowercase letters, digits or underscores.');
       if (RESERVED.has(handle)) fail(400, 'That handle is reserved. Pick another one.');
       let email = str(b.email, 120).toLowerCase();
@@ -510,7 +523,7 @@ async function api(request, env, url) {
     const bio = typeof b.bio === 'string' ? str(b.bio, 280) : me.bio;
     const city = typeof b.city === 'string' ? str(b.city, 60) : me.city;
     const color = COLOR_RE.test(b.color || '') ? b.color : me.color;
-    const kind = ['member', 'promoter', 'artist'].includes(b.kind) ? b.kind : me.kind;
+    const kind = ['member', 'promoter', 'artist', 'club'].includes(b.kind) ? b.kind : me.kind;
     let avatar = me.avatar;
     if (typeof b.avatar === 'string' && (b.avatar === '' || PRESET_RE.test(b.avatar))) {
       await dropImage(env, me, me.avatar);
@@ -645,7 +658,7 @@ async function api(request, env, url) {
            AND (u.account_group IS NULL OR u.account_group != ?2)
          ORDER BY u.featured DESC, (SELECT COUNT(*) FROM events e WHERE e.host_id = u.id) DESC, u.created_at DESC LIMIT 24`
       ).bind(me.id, me.account_group || -1).all()).results.filter((u) => !seen.has(u.id));
-      for (const u of more) { if (out.length >= 12) break; out.push({ ...publicUser(u), reason: u.kind === 'artist' ? 'Artist' : 'Label / Promoter' }); }
+      for (const u of more) { if (out.length >= 12) break; out.push({ ...publicUser(u), reason: u.kind === 'artist' ? 'Artist' : u.kind === 'club' ? 'Club' : 'Label / Promoter' }); }
     }
     return json({ users: out });
   }
@@ -730,9 +743,19 @@ async function api(request, env, url) {
       const events = (await env.DB.prepare(
         `${EVENT_SELECT} WHERE e.host_id = ?1 AND (e.visibility = 'public' OR ?1 = ?2) AND ${UPCOMING} ORDER BY ${UPCOMING_ORDER}`
       ).bind(u.id, me ? me.id : -1).all()).results.map(eventShape);
-      const top = (await env.DB.prepare(
-        `SELECT u.* FROM follows f JOIN users u ON u.id = f.followee_id WHERE f.follower_id = ? ORDER BY f.created_at LIMIT 8`
-      ).bind(u.id).all()).results.map(publicUser);
+      const isMe = !!me && me.id === u.id;
+      // Who they follow, grouped on the page by kind; favorites first. No counts anywhere.
+      const following = (await env.DB.prepare(
+        `SELECT u.*, f.favorite FROM follows f JOIN users u ON u.id = f.followee_id WHERE f.follower_id = ? ORDER BY f.favorite DESC, f.created_at DESC LIMIT 120`
+      ).bind(u.id).all()).results.map((x) => ({ ...publicUser(x), favorite: !!x.favorite }));
+      const past = (await env.DB.prepare(
+        `${EVENT_SELECT} WHERE e.host_id = ?1 AND (e.visibility = 'public' OR ?1 = ?2) AND e.starts_at != '' AND NOT ${UPCOMING} ORDER BY e.starts_at DESC LIMIT 24`
+      ).bind(u.id, me ? me.id : -1).all()).results.map(eventShape);
+      const attended = (await env.DB.prepare(
+        `${EVENT_SELECT} JOIN rsvps r ON r.event_id = e.id AND r.user_id = ?1
+         WHERE (e.visibility = 'public' OR ?2) AND e.starts_at != '' AND NOT ${UPCOMING} ORDER BY e.starts_at DESC LIMIT 24`
+      ).bind(u.id, isMe ? 1 : 0).all()).results.map(eventShape);
+      const fav = me && !isMe ? await env.DB.prepare('SELECT favorite FROM follows WHERE follower_id = ? AND followee_id = ?').bind(me.id, u.id).first() : null;
       const rows = (await env.DB.prepare(
         `SELECT * FROM (
            SELECT p.id, p.text, p.event_id, p.created_at, p.author_id, NULL AS by_id, p.created_at AS at FROM posts p WHERE p.author_id = ?1
@@ -744,8 +767,19 @@ async function api(request, env, url) {
       return json({
         user: publicUser(u),
         is_following: isFollowing, is_me: !!me && me.id === u.id,
-        events, top8: top, posts: await hydratePosts(env, rows, me)
+        is_favorite: !!(fav && fav.favorite),
+        events, past, attended, following, posts: await hydratePosts(env, rows, me)
       });
+    }
+    if (seg[2] === 'favorite') {
+      requireUser(me);
+      if (me.id === u.id) fail(400, "You can't favorite yourself.");
+      if (method === 'POST') {
+        await env.DB.prepare('INSERT INTO follows (follower_id, followee_id, favorite) VALUES (?, ?, 1) ON CONFLICT(follower_id, followee_id) DO UPDATE SET favorite = 1').bind(me.id, u.id).run();
+      } else if (method === 'DELETE') {
+        await env.DB.prepare('UPDATE follows SET favorite = 0 WHERE follower_id = ? AND followee_id = ?').bind(me.id, u.id).run();
+      } else fail(405, 'Method not allowed.');
+      return json({ favorite: method === 'POST' });
     }
     if (seg[2] === 'follow') {
       requireUser(me);
@@ -947,6 +981,10 @@ async function api(request, env, url) {
            WHEN excluded.list = 'ff' OR rsvps.list = 'ff' THEN 'ff'
            WHEN excluded.list = 'gl' OR rsvps.list = 'gl' THEN 'gl' ELSE 'going' END`
       ).bind(ev.id, me.id, referrerId, list).run();
+      // Joining through the host's link means you follow the host.
+      if ((bk && (bk === ev.gl_token || bk === ev.ff_token)) || list !== 'going') {
+        if (me.id !== ev.host_id) await env.DB.prepare('INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)').bind(me.id, ev.host_id).run();
+      }
       return json({ going: true });
     }
     // Someone without an account asks to be on the guestlist; the host approves.
@@ -1077,7 +1115,7 @@ async function signup(request, env, url) {
   const email = str(b.email, 120).toLowerCase();
   const password = String(b.password || '');
   const name = str(b.name, 60) || handle;
-  const kind = ['member', 'promoter', 'artist'].includes(b.kind) ? b.kind : 'member';
+  const kind = ['member', 'promoter', 'artist', 'club'].includes(b.kind) ? b.kind : 'member';
   if (!HANDLE_RE.test(handle)) fail(400, 'Handles use 2 to 24 lowercase letters, digits or underscores.');
   if (RESERVED.has(handle)) fail(400, 'That handle is reserved. Pick another one.');
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail(400, 'Enter a valid email address.');
@@ -1087,15 +1125,28 @@ async function signup(request, env, url) {
   const first = n === 0;
   let invite = null;   // single-use admin code
   let inviter = null;  // owner of a personal invite link
+  let evInvite = null; // an event's guestlist or friends & family link
   if (!first) {
+    // Sign-up is by invitation: a personal invite link, a single-use code, or an event's list link.
     const code = str(b.invite, 40).toLowerCase();
-    inviter = code ? await env.DB.prepare('SELECT * FROM users WHERE invite_link = ?').bind(code).first() : null;
-    // Sign-up is open. An invite link is optional: when valid, it credits who invited you and you follow each other.
-    if (inviter) {
-      const s = await inviteStats(env, inviter);
-      if (!s.unlimited && s.remaining <= 0) inviter = null;
-    } else if (code) {
-      invite = await env.DB.prepare('SELECT * FROM invites WHERE code = ? AND used_by IS NULL').bind(code).first();
+    if (code) {
+      inviter = await env.DB.prepare('SELECT * FROM users WHERE invite_link = ?').bind(code).first();
+      if (inviter) {
+        const s = await inviteStats(env, inviter);
+        if (!s.unlimited && s.remaining <= 0) fail(403, 'This invitation link has been used up. Ask for a new one.');
+      } else {
+        invite = await env.DB.prepare('SELECT * FROM invites WHERE code = ? AND used_by IS NULL').bind(code).first();
+        if (!invite) fail(403, 'This invitation is not valid anymore.');
+      }
+    } else if (b.event && b.k) {
+      const ev = await env.DB.prepare('SELECT * FROM events WHERE id = ?').bind(String(b.event)).first();
+      const k = String(b.k);
+      const list = ev && ev.gl_token && k === ev.gl_token && ev.gl_on ? 'gl' : ev && ev.ff_token && k === ev.ff_token && ev.ff_on ? 'ff' : '';
+      if (!list) fail(403, 'This invitation is not valid anymore.');
+      evInvite = { ev, list };
+      inviter = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(ev.host_id).first();
+    } else {
+      fail(403, 'rsvp.fm is invitation only. Ask an artist, a club, a label or a friend for their link.');
     }
   }
   if (await env.DB.prepare('SELECT 1 FROM users WHERE handle = ? OR email = ? UNION SELECT 1 FROM handle_history WHERE handle = ?').bind(handle, email, handle).first()) {
@@ -1104,6 +1155,7 @@ async function signup(request, env, url) {
   const palette = ['#E23B2E', '#2F55D4', '#E8A80C', '#1E8C6E', '#9B59D0', '#D23C7A', '#1FA4B4'];
   const color = COLOR_RE.test(b.color || '') ? b.color : palette[Math.floor(Math.random() * palette.length)];
   const invitedBy = inviter ? inviter.id : (invite ? invite.created_by : null);
+  const inviterRow = inviter || (invite ? await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(invite.created_by).first() : null);
   const user = await env.DB.prepare(
     `INSERT INTO users (handle, email, password_hash, name, kind, color, is_admin, featured, invite_link, invite_quota, invited_by, avatar)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`
@@ -1112,10 +1164,17 @@ async function signup(request, env, url) {
 
   const stmts = [];
   if (invite) stmts.push(env.DB.prepare(`UPDATE invites SET used_by = ?, used_at = datetime('now') WHERE code = ?`).bind(user.id, invite.code));
-  // follow whoever invited you, and they follow you back
+  // You follow whoever invited you. A friend (guest account) follows you back; artists, labels and clubs don't have to.
   if (invitedBy) {
     stmts.push(env.DB.prepare('INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)').bind(user.id, invitedBy));
-    stmts.push(env.DB.prepare('INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)').bind(invitedBy, user.id));
+    if (inviterRow && inviterRow.kind === 'member') stmts.push(env.DB.prepare('INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)').bind(invitedBy, user.id));
+  }
+  // Invited through an event's link: you're on that list.
+  if (evInvite) {
+    stmts.push(env.DB.prepare(
+      `INSERT INTO rsvps (event_id, user_id, list) VALUES (?, ?, ?)
+       ON CONFLICT(event_id, user_id) DO UPDATE SET list = CASE WHEN excluded.list = 'ff' OR rsvps.list = 'ff' THEN 'ff' ELSE 'gl' END`
+    ).bind(evInvite.ev.id, user.id, evInvite.list));
   }
   if (stmts.length) await env.DB.batch(stmts);
   return json({ user: publicUser(user) }, 201, { 'set-cookie': await startSession(env, user.id, url) });
