@@ -164,10 +164,10 @@
   // ---------- views ----------
   function viewWelcome() {
     header({}); setTab('');
-    main.innerHTML = '<section class="hero gut"><span class="label">Invite only</span>' +
+    main.innerHTML = '<section class="hero gut">' +
       '<h1>Updates from artists &amp; labels.</h1>' +
       '<p>Follow the artists, labels and promoters you love, and hear from them directly: new records, new nights, nothing else. No ads, no algorithm, in the order they post. RSVP in one tap.</p>' +
-      '<div class="acts" style="flex-wrap:wrap"><a class="pill big solid" href="/signup">I have an invite</a><a class="pill big" href="/login">Log in</a></div></section>' +
+      '<div class="acts" style="flex-wrap:wrap"><a class="pill big solid" href="/signup">Join</a><a class="pill big" href="/login">Log in</a></div></section>' +
       '<div class="sep"></div><div id="disc"></div>';
     renderDiscover(document.getElementById('disc'));
   }
@@ -493,7 +493,7 @@
       '<div class="field"><label for="login">Handle or email</label><input id="login" name="login" autocomplete="username" autocapitalize="none" required></div>' +
       '<div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required></div>' +
       '<p class="err" id="err" hidden></p><button class="pill big solid" type="submit">Log in</button></form>' +
-      '<p class="small">No account? rsvp.fm is invite-only. <a class="accent" href="/signup">Join with an invite</a>.</p></div>';
+      '<p class="small">No account yet? <a class="accent" href="/signup">Join rsvp.fm</a>.</p></div>';
   }
 
   function viewSignup() {
@@ -501,8 +501,7 @@
     header({ back: true, title: 'Join' }); setTab('');
     var q = new URLSearchParams(location.search);
     main.innerHTML = '<div class="gut section"><h1>Claim your rsvp.fm/handle.</h1><form id="f-signup">' +
-      (needsInvite ? '<div class="field"><label for="invite">Invite code</label><input id="invite" name="invite" autocapitalize="none" required value="' + esc(q.get('invite') || '') + '"></div>' :
-        '<p class="small" style="margin:0">You are the first one here. This account becomes the admin.</p>') +
+      (q.get('invite') ? '<input type="hidden" name="invite" value="' + esc(q.get('invite')) + '"><p class="small" style="margin:0">You were invited. You will follow each other.</p>' : '') +
       '<div class="field"><label for="handle">Handle</label><input id="handle" name="handle" autocapitalize="none" pattern="[a-z0-9_]{2,24}" maxlength="24" required placeholder="astradanza"><span class="small">rsvp.fm/<span id="hprev">handle</span></span></div>' +
       '<div class="field"><label for="name">Display name</label><input id="name" name="name" maxlength="60" required></div>' +
       '<fieldset><legend class="field">I am</legend><div class="seg">' +

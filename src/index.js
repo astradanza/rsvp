@@ -364,7 +364,7 @@ async function api(request, env, url) {
 
   // --- auth ---
   if (path === '/api/session' && method === 'GET') {
-    if (!me) return json({ user: null, needs_invite: (await env.DB.prepare('SELECT COUNT(*) AS n FROM users').first()).n > 0 });
+    if (!me) return json({ user: null, needs_invite: false });
     return json({ user: { ...publicUser(me), email: me.email, is_admin: !!me.is_admin } });
   }
   if (path === '/api/signup' && method === 'POST') return signup(request, env, url);
@@ -962,12 +962,12 @@ async function signup(request, env, url) {
   if (!first) {
     const code = str(b.invite, 40).toLowerCase();
     inviter = code ? await env.DB.prepare('SELECT * FROM users WHERE invite_link = ?').bind(code).first() : null;
+    // Sign-up is open. An invite link is optional: when valid, it credits who invited you and you follow each other.
     if (inviter) {
       const s = await inviteStats(env, inviter);
-      if (!s.unlimited && s.remaining <= 0) fail(403, `@${inviter.handle}'s invite link has been used ${s.quota} times already. Ask them for a new invite.`);
-    } else {
-      invite = code ? await env.DB.prepare('SELECT * FROM invites WHERE code = ? AND used_by IS NULL').bind(code).first() : null;
-      if (!invite) fail(403, 'rsvp.fm is invite-only for now. That invite link is not valid or was already used.');
+      if (!s.unlimited && s.remaining <= 0) inviter = null;
+    } else if (code) {
+      invite = await env.DB.prepare('SELECT * FROM invites WHERE code = ? AND used_by IS NULL').bind(code).first();
     }
   }
   if (await env.DB.prepare('SELECT 1 FROM users WHERE handle = ? OR email = ? UNION SELECT 1 FROM handle_history WHERE handle = ?').bind(handle, email, handle).first()) {
