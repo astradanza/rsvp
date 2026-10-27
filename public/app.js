@@ -585,7 +585,7 @@
     var q = new URLSearchParams(location.search);
     main.innerHTML = '<div class="gut section"><h1>Claim your rsvp.fm/handle.</h1><form id="f-signup">' +
       (q.get('invite') ? '<input type="hidden" name="invite" value="' + esc(q.get('invite')) + '"><p class="small" style="margin:0">You were invited. You will follow each other.</p>' : '') +
-      '<div class="field"><label for="handle">Handle</label><input id="handle" name="handle" autocapitalize="none" pattern="[a-z0-9_]{2,24}" maxlength="24" required placeholder="astradanza"><span class="small">rsvp.fm/<span id="hprev">handle</span></span></div>' +
+      '<div class="field"><label for="handle">Handle</label><input id="handle" name="handle" autocapitalize="none" pattern="[a-z0-9_]{2,24}" maxlength="24" required placeholder="yourname"><span class="small">rsvp.fm/<span id="hprev">handle</span></span></div>' +
       '<div class="field"><label for="name">Display name</label><input id="name" name="name" maxlength="60" required></div>' +
       '<fieldset><legend class="field">I am</legend><div class="seg">' +
       '<label><input type="radio" name="kind" value="member" checked><span>Guest</span></label>' +
@@ -670,8 +670,8 @@
     }
     h += '<div class="gut section sep" id="create"><h2>Create a page</h2><p class="small" style="margin:0">A label, a party series, an artist project, or a page for a partner. It is linked to your account: switch to it by tapping Me. Each page uses one of your invites.</p>' +
       '<form id="f-account">' +
-      '<div class="two"><div class="field"><label for="ahandle">Handle</label><input id="ahandle" name="handle" autocapitalize="none" maxlength="24" required placeholder="astradanza"></div>' +
-      '<div class="field"><label for="aname">Display name</label><input id="aname" name="name" maxlength="60" required placeholder="Astradanza"></div></div>' +
+      '<div class="two"><div class="field"><label for="ahandle">Handle</label><input id="ahandle" name="handle" autocapitalize="none" maxlength="24" required placeholder="yourlabel"></div>' +
+      '<div class="field"><label for="aname">Display name</label><input id="aname" name="name" maxlength="60" required placeholder="Your Label"></div></div>' +
       '<fieldset><legend class="field">Page type</legend><div class="seg">' +
       '<label><input type="radio" name="kind" value="promoter" checked><span>Label / Promoter</span></label>' +
       '<label><input type="radio" name="kind" value="artist"><span>Artist</span></label>' +
