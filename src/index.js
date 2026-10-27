@@ -10,7 +10,8 @@ const ADDED_COLUMNS = [
   ['users', 'ambassador', 'INTEGER NOT NULL DEFAULT 0'],
   ['users', 'avatar', "TEXT NOT NULL DEFAULT ''"],
   ['users', 'banner', "TEXT NOT NULL DEFAULT ''"],
-  ['users', 'claim_token', 'TEXT']
+  ['users', 'claim_token', 'TEXT'],
+  ['users', 'account_group', 'INTEGER']
 ];
 let schemaReady = null;
 function ensureSchema(env) {
@@ -282,8 +283,79 @@ async function api(request, env, url) {
       const b = await body(request);
       const password = String(b.password || '');
       if (password.length < 8) fail(400, 'Use at least 8 characters for your password.');
-      await env.DB.prepare('UPDATE users SET password_hash = ?, claim_token = NULL WHERE id = ?').bind(await hashPassword(password), u.id).run();
+      await env.DB.prepare('UPDATE users SET password_hash = ?, claim_token = NULL, account_group = NULL WHERE id = ?').bind(await hashPassword(password), u.id).run();
       return json({ user: publicUser(u) }, 200, { 'set-cookie': await startSession(env, u.id, url) });
+    }
+  }
+
+  // --- linked accounts (switch between pages like on Instagram) ---
+  if (seg[0] === 'accounts') {
+    requireUser(me);
+    if (seg.length === 1 && method === 'GET') {
+      const rows = me.account_group
+        ? (await env.DB.prepare('SELECT * FROM users WHERE account_group = ? ORDER BY id').bind(me.account_group).all()).results
+        : [me];
+      return json({ accounts: rows.map((u) => ({ ...publicUser(u), current: u.id === me.id })) });
+    }
+    // Create a page (a label, a brand, a project, or a page for someone else).
+    if (seg.length === 1 && method === 'POST') {
+      const b = await body(request);
+      const handle = str(b.handle, 24).toLowerCase().replace(/^@/, '');
+      const name = str(b.name, 60) || handle;
+      const kind = ['member', 'promoter', 'artist'].includes(b.kind) ? b.kind : 'promoter';
+      if (!HANDLE_RE.test(handle)) fail(400, 'Handles use 2 to 24 lowercase letters, digits or underscores.');
+      if (RESERVED.has(handle)) fail(400, 'That handle is reserved. Pick another one.');
+      let email = str(b.email, 120).toLowerCase();
+      if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail(400, 'Enter a valid email address, or leave it empty.');
+      if (await env.DB.prepare('SELECT 1 FROM users WHERE handle = ? OR (? != \'\' AND email = ?)').bind(handle, email, email).first()) fail(409, 'That handle or email is already taken.');
+      if (!email) email = `${handle}.${randomCode(6)}@pages.rsvp.fm`; // placeholder: the page is reached by switching, not by email
+      const stats = await inviteStats(env, me);
+      if (!stats.unlimited && stats.remaining <= 0) fail(403, 'You have used all your invites, and each new page uses one. Ask us for more.');
+      const password = typeof b.password === 'string' ? b.password : '';
+      if (password && password.length < 8) fail(400, 'Use at least 8 characters for the password, or leave it empty.');
+      const handOver = !!b.hand_over; // created for someone else: give them an activation link
+      const token = handOver && !password ? randomToken(24) : null;
+      const hash = password ? await hashPassword(password) : '!';
+      const group = me.account_group || me.id;
+      const palette = ['#E23B2E', '#2F55D4', '#E8A80C', '#1E8C6E', '#9B59D0', '#D23C7A', '#1FA4B4'];
+      const u = await env.DB.prepare(
+        `INSERT INTO users (handle, email, password_hash, name, kind, color, invite_link, invite_quota, invited_by, avatar, claim_token, account_group)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`
+      ).bind(handle, email, hash, name, kind, palette[Math.floor(Math.random() * palette.length)], randomCode(8), DEFAULT_QUOTA, me.id,
+        PRESETS[Math.floor(Math.random() * PRESETS.length)], token, group).first();
+      await env.DB.batch([
+        env.DB.prepare('UPDATE users SET account_group = ? WHERE id = ? AND account_group IS NULL').bind(group, me.id),
+        env.DB.prepare('INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)').bind(u.id, me.id),
+        env.DB.prepare('INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)').bind(me.id, u.id)
+      ]);
+      return json({ user: publicUser(u), claim: token }, 201);
+    }
+    if (seg[1] === 'switch' && method === 'POST') {
+      const b = await body(request);
+      const u = await userByHandle(env, b.handle || '');
+      if (!u || !me.account_group || u.account_group !== me.account_group) fail(403, 'That account is not linked to yours.');
+      const token = cookieValue(request, 'sid');
+      if (token) await env.DB.prepare('DELETE FROM sessions WHERE token = ?').bind(token).run();
+      return json({ user: publicUser(u) }, 200, { 'set-cookie': await startSession(env, u.id, url) });
+    }
+    // Link an existing account you can log in to.
+    if (seg[1] === 'link' && method === 'POST') {
+      const b = await body(request);
+      const id = str(b.login, 120).toLowerCase().replace(/^@/, '');
+      const u = await env.DB.prepare('SELECT * FROM users WHERE email = ? OR handle = ?').bind(id, id).first();
+      if (!u || !(await verifyPassword(String(b.password || ''), u.password_hash))) fail(401, 'Wrong handle, email or password.');
+      if (u.id === me.id) fail(400, 'You are already on this account.');
+      const group = me.account_group || me.id;
+      await env.DB.prepare(
+        'UPDATE users SET account_group = ?1 WHERE id = ?2 OR id = ?3 OR (?4 IS NOT NULL AND account_group = ?4)'
+      ).bind(group, me.id, u.id, u.account_group).run();
+      const token = cookieValue(request, 'sid');
+      if (token) await env.DB.prepare('DELETE FROM sessions WHERE token = ?').bind(token).run();
+      return json({ user: publicUser(u) }, 200, { 'set-cookie': await startSession(env, u.id, url) });
+    }
+    if (seg[1] === 'unlink' && method === 'POST') {
+      await env.DB.prepare('UPDATE users SET account_group = NULL WHERE id = ?').bind(me.id).run();
+      return json({ ok: true });
     }
   }
 
@@ -644,33 +716,6 @@ async function api(request, env, url) {
       const quota = on ? Math.max(u.invite_quota, Math.min(1000, Number(b.quota) || AMBASSADOR_QUOTA)) : u.invite_quota;
       await env.DB.prepare('UPDATE users SET ambassador = ?, invite_quota = ? WHERE id = ?').bind(on ? 1 : 0, quota, u.id).run();
       return json({ ok: true, quota });
-    }
-    // Create a page for someone; they activate it with a one-time link and choose their own password.
-    if (seg[1] === 'accounts' && method === 'POST') {
-      const b = await body(request);
-      const handle = str(b.handle, 24).toLowerCase().replace(/^@/, '');
-      const email = str(b.email, 120).toLowerCase();
-      const name = str(b.name, 60) || handle;
-      const kind = ['member', 'promoter', 'artist'].includes(b.kind) ? b.kind : 'promoter';
-      if (!HANDLE_RE.test(handle)) fail(400, 'Handles use 2 to 24 lowercase letters, digits or underscores.');
-      if (RESERVED.has(handle)) fail(400, 'That handle is reserved. Pick another one.');
-      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail(400, 'Enter a valid email address.');
-      if (await env.DB.prepare('SELECT 1 FROM users WHERE handle = ? OR email = ?').bind(handle, email).first()) fail(409, 'That handle or email is already taken.');
-      const password = typeof b.password === 'string' ? b.password : '';
-      if (password && password.length < 8) fail(400, 'Use at least 8 characters for the password, or leave it empty to send an activation link.');
-      const token = password ? null : randomToken(24);
-      const hash = password ? await hashPassword(password) : '!';
-      const palette = ['#E23B2E', '#2F55D4', '#E8A80C', '#1E8C6E', '#9B59D0', '#D23C7A', '#1FA4B4'];
-      const u = await env.DB.prepare(
-        `INSERT INTO users (handle, email, password_hash, name, kind, color, invite_link, invite_quota, invited_by, avatar, claim_token)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`
-      ).bind(handle, email, hash, name, kind, palette[Math.floor(Math.random() * palette.length)], randomCode(8), DEFAULT_QUOTA, me.id,
-        PRESETS[Math.floor(Math.random() * PRESETS.length)], token).first();
-      await env.DB.batch([
-        env.DB.prepare('INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)').bind(u.id, me.id),
-        env.DB.prepare('INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)').bind(me.id, u.id)
-      ]);
-      return json({ user: publicUser(u), claim: token }, 201);
     }
     if (seg[1] === 'quota' && method === 'POST') {
       const b = await body(request);

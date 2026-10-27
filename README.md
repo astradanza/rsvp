@@ -16,7 +16,8 @@ Runs entirely on Cloudflare: one Worker (API + static app) and one D1 database.
 - RSVP in one tap. Share links carry `?ref=handle`; the RSVP records who referred it.
 - Host view on each night: the guestlist, who came through whom, and the commission owed to each referrer.
 - Member view: nights you're going to, people you brought, estimated commission.
-- Admin: unlimited invite link, single-use codes, feature pages in Discover, create pages for others (with a password, or an activation link `rsvp.fm/claim/…` so they choose their own).
+- Admin: unlimited invite link, single-use codes, feature pages in Discover.
+- Anyone can create a page (a label, a party series, an artist project, or a page for a partner). Each page uses one invite. Pages you create are linked to your account; switch between linked accounts from your page, like on Instagram. You can also link an existing account by logging in to it once. A page made for someone else gets an activation link (`rsvp.fm/claim/…`); once activated it leaves your accounts.
 
 - Profile photo: pick one of 16 hand-drawn avatars (new members get one at random) or upload your own; optional header image. Uploads are resized in the browser and stored in D1.
 

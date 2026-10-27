@@ -57,7 +57,7 @@ h2{margin:0;font-size:20px;font-weight:800;letter-spacing:-.3px;text-wrap:balanc
 .row{display:flex;align-items:center;gap:14px;width:100%;padding-block:12px;border-bottom:1px solid var(--line)}
 .date{width:56px;height:56px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font:700 11px var(--mono);line-height:1.2;text-align:center;white-space:pre-line}
 .banner{height:112px;position:relative;overflow:hidden}
-.ptop{display:flex;align-items:flex-end;justify-content:space-between;margin-top:-36px;gap:12px}
+.ptop{position:relative;z-index:1;display:flex;align-items:flex-end;justify-content:space-between;margin-top:-36px;gap:12px}
 .ring{border:4px solid var(--bg);border-radius:50%;display:inline-flex}
 .stats{display:flex;gap:18px;flex-wrap:wrap;font:12px var(--mono);color:var(--muted)}.stats strong{color:var(--fg)}
 .grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}

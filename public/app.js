@@ -205,7 +205,10 @@
     header({ back: true, title: 'rsvp.fm/' + handle }); setTab(me && me.handle === handle ? 'me' : ''); loading();
     api('GET', '/users/' + encodeURIComponent(handle)).then(function (j) {
       var u = j.user, h = '';
-      if (j.is_me) header({ back: history.length > 1, title: 'rsvp.fm/' + u.handle, right: '<a class="ico" aria-label="Settings" href="/settings">' + I.gear + '</a>' });
+      if (j.is_me) {
+        header({ back: false, title: '', right: '<a class="ico" aria-label="Settings" href="/settings">' + I.gear + '</a>' });
+        hdr.querySelector('.logo').insertAdjacentHTML('afterend', '<a class="pill ghost" href="/switch" aria-label="Switch account" style="margin-left:8px;gap:6px;color:var(--fg)">@' + esc(u.handle) + ' <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></a>');
+      }
       if (u.banner && /^\/api\/img\//.test(u.banner)) h += '<div class="banner" style="height:160px;background:' + esc(u.color) + ' url(' + esc(u.banner) + ') center/cover no-repeat"></div>';
       else h += '<div class="banner" style="background:' + esc(u.color) + '"><div style="position:absolute;width:120px;height:120px;border-radius:50%;border:3px solid var(--ink);right:24px;top:-40px"></div><div style="position:absolute;width:40px;height:40px;border-radius:50%;background:var(--ink);right:140px;top:40px"></div></div>';
       h += '<div class="gut" style="display:flex;flex-direction:column;gap:10px;padding-block:0 16px"><div class="ptop"><span class="ring">' + av(u, 68) + '</span>' +
@@ -399,6 +402,27 @@
     });
   }
 
+  function viewSwitch() {
+    if (!me) return needLogin();
+    header({ back: true, title: 'Switch account' }); setTab('me'); loading();
+    api('GET', '/accounts').then(function (j) {
+      var h = '<div class="gut section"><h2>Your accounts</h2><div>';
+      j.accounts.forEach(function (a) {
+        h += '<button class="row" ' + (a.current ? 'disabled style="opacity:1"' : 'data-act="switchto" data-id="' + esc(a.handle) + '"') + '>' + av(a, 44) +
+          '<span style="display:flex;flex-direction:column;min-width:0;flex:1"><span class="name">' + esc(a.name) + '</span><span class="meta">@' + esc(a.handle) + ' · ' + esc(kindLabel(a.kind)) + '</span></span>' +
+          (a.current ? '<span class="accent mono" style="font-size:11px">CURRENT</span>' : '<span class="small">Switch</span>') + '</button>';
+      });
+      h += '</div></div>';
+      h += '<div class="gut section sep"><a class="pill" href="/settings#create" style="align-self:flex-start">Create a new page</a></div>';
+      h += '<div class="gut section sep"><h2>Add an existing account</h2><p class="small" style="margin:0">Log in once to link it. After that, switch in one tap.</p>' +
+        '<form id="f-link"><div class="field"><label for="llogin">Handle or email</label><input id="llogin" name="login" autocapitalize="none" autocomplete="off" required></div>' +
+        '<div class="field"><label for="lpass">Password</label><input id="lpass" name="password" type="password" autocomplete="off" required></div>' +
+        '<p class="err" id="err" hidden></p><button class="pill big solid" type="submit">Add account</button></form></div>';
+      if (j.accounts.length > 1) h += '<div class="gut section sep"><button class="pill ghost" data-act="unlink">Remove @' + esc(me.handle) + ' from this group</button></div>';
+      main.innerHTML = h;
+    }).catch(showError);
+  }
+
   function viewClaim(token) {
     header({ title: 'Activate' }); setTab(''); loading();
     api('GET', '/claim/' + token).then(function (j) {
@@ -442,23 +466,25 @@
       h += '<div class="gut section sep" id="ambassadors"></div>' +
         '<div class="gut section sep"><h2>Admin</h2><form id="f-admin-invites" class="acts"><button class="pill" type="submit">Create 5 single-use codes</button></form>' +
         '<form id="f-feature"><div class="field"><label for="fhandle">Feature in Discover (handle)</label><input id="fhandle" name="handle" autocapitalize="none" required></div>' +
-        '<div class="acts"><button class="pill" type="submit" name="featured" value="1">Feature</button><button class="pill ghost" type="submit" name="featured" value="0">Remove</button></div></form><div id="admin-out"></div></div>' +
-        '<div class="gut section sep"><h2>Create a page</h2><p class="small" style="margin:0">For a partner, a brand or a second account of yours. Leave the password empty to get an activation link instead.</p>' +
-        '<form id="f-account">' +
-        '<div class="two"><div class="field"><label for="ahandle">Handle</label><input id="ahandle" name="handle" autocapitalize="none" maxlength="24" required placeholder="astradanza"></div>' +
-        '<div class="field"><label for="aname">Display name</label><input id="aname" name="name" maxlength="60" required placeholder="Astradanza"></div></div>' +
-        '<div class="field"><label for="aemail">Email</label><input id="aemail" name="email" type="email" autocomplete="off" required></div>' +
-        '<fieldset><legend class="field">Page type</legend><div class="seg">' +
-        '<label><input type="radio" name="kind" value="promoter" checked><span>Label / Promoter</span></label>' +
-        '<label><input type="radio" name="kind" value="artist"><span>Artist</span></label>' +
-        '<label><input type="radio" name="kind" value="member"><span>Guest</span></label></div></fieldset>' +
-        '<div class="field"><label for="apass">Password (optional)</label><input id="apass" name="password" type="password" autocomplete="new-password" minlength="8"></div>' +
-        '<p class="err" id="err-account" hidden></p><button class="pill big solid" type="submit">Create the page</button></form><div id="account-out"></div></div>';
+        '<div class="acts"><button class="pill" type="submit" name="featured" value="1">Feature</button><button class="pill ghost" type="submit" name="featured" value="0">Remove</button></div></form><div id="admin-out"></div></div>';
     }
+    h += '<div class="gut section sep" id="create"><h2>Create a page</h2><p class="small" style="margin:0">A label, a party series, an artist project, or a page for a partner. It is linked to your account: switch to it by tapping Me. Each page uses one of your invites.</p>' +
+      '<form id="f-account">' +
+      '<div class="two"><div class="field"><label for="ahandle">Handle</label><input id="ahandle" name="handle" autocapitalize="none" maxlength="24" required placeholder="astradanza"></div>' +
+      '<div class="field"><label for="aname">Display name</label><input id="aname" name="name" maxlength="60" required placeholder="Astradanza"></div></div>' +
+      '<fieldset><legend class="field">Page type</legend><div class="seg">' +
+      '<label><input type="radio" name="kind" value="promoter" checked><span>Label / Promoter</span></label>' +
+      '<label><input type="radio" name="kind" value="artist"><span>Artist</span></label>' +
+      '<label><input type="radio" name="kind" value="member"><span>Guest</span></label></div></fieldset>' +
+      '<div class="field"><label for="aemail">Email (optional)</label><input id="aemail" name="email" type="email" autocomplete="off"></div>' +
+      '<div class="field"><label for="apass">Password (optional, to log in to it directly)</label><input id="apass" name="password" type="password" autocomplete="new-password" minlength="8"></div>' +
+      '<label class="small" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer"><input type="checkbox" name="hand_over" value="1" style="width:auto;margin-top:2px"><span>This page is for someone else: give me an activation link so they choose their own password. Once they activate it, it leaves your accounts.</span></label>' +
+      '<p class="err" id="err-account" hidden></p><button class="pill big solid" type="submit">Create the page</button></form><div id="account-out"></div></div>';
     h += '<div class="gut section sep"><button class="pill ghost" data-act="logout">Log out</button></div>';
     main.innerHTML = h;
     loadInvites();
     if (me.is_admin) loadAmbassadors();
+    if (location.hash === '#create') setTimeout(function () { var c = document.getElementById('create'); if (c) c.scrollIntoView(); }, 60);
   }
   function inviteUrl(code) { return location.origin + '/i/' + code; }
   function loadInvites() {
@@ -516,6 +542,7 @@
     if (p === '/signup' || p === '/invite') return viewSignup();
     if ((m = /^\/i\/([a-z0-9]+)$/i.exec(p))) return go('/signup?invite=' + m[1].toLowerCase(), true);
     if ((m = /^\/claim\/([A-Za-z0-9_-]+)$/.exec(p))) return viewClaim(m[1]);
+    if (p === '/switch') return viewSwitch();
     if (p === '/settings') return viewSettings();
     if ((m = /^\/e\/([a-z0-9]+)$/i.exec(p))) return viewEvent(m[1]);
     if ((m = /^\/@?([a-z0-9_]{2,24})$/i.exec(p))) return viewProfile(m[1].toLowerCase());
@@ -526,7 +553,7 @@
   document.addEventListener('click', function (ev) {
     var a = ev.target.closest('a');
     if (a && a.origin === location.origin && !a.target && !ev.metaKey && !ev.ctrlKey && !ev.shiftKey) {
-      ev.preventDefault(); return go(a.pathname + a.search);
+      ev.preventDefault(); return go(a.pathname + a.search + a.hash);
     }
     var b = ev.target.closest('button[data-act]'); if (!b) return;
     var act = b.getAttribute('data-act'), id = b.getAttribute('data-id');
@@ -564,6 +591,11 @@
       if (b.getAttribute('data-confirm') !== '1') { b.setAttribute('data-confirm', '1'); b.textContent = 'Tap again to delete'; return done(); }
       var wh = b.getAttribute('data-handle');
       api('DELETE', '/wall/' + wh + '/' + id).then(function () { say('Deleted.'); return api('GET', '/users/' + wh).then(function (j) { renderWall(j.user, j.is_me); }); }).catch(function (e) { say(e.message); done(); });
+    } else if (act === 'switchto') {
+      api('POST', '/accounts/switch', { handle: id }).then(boot).then(function () { say('Now on @' + me.handle); go('/' + me.handle, true); }).catch(function (e) { say(e.message); done(); });
+    } else if (act === 'unlink') {
+      if (b.getAttribute('data-confirm') !== '1') { b.setAttribute('data-confirm', '1'); b.textContent = 'Tap again: you will need to log in to switch back'; return done(); }
+      api('POST', '/accounts/unlink', {}).then(function () { say('Removed from the group.'); viewSwitch(); }).catch(function (e) { say(e.message); done(); });
     } else if (act === 'rmbanner') {
       api('PATCH', '/me', { banner: '' }).then(function (j) { for (var k in j.user) me[k] = j.user[k]; say('Header removed.'); viewSettings(); }).catch(function (e) { say(e.message); done(); });
     } else if (act === 'regeninvite') {
@@ -582,7 +614,7 @@
     var o = {};
     Array.prototype.forEach.call(form.elements, function (el) {
       if (!el.name || el.type === 'submit') return;
-      if (el.type === 'radio') { if (el.checked) o[el.name] = el.value; return; }
+      if (el.type === 'radio' || el.type === 'checkbox') { if (el.checked) o[el.name] = el.value; return; }
       o[el.name] = el.value;
     });
     return o;
@@ -622,17 +654,21 @@
         document.getElementById('admin-out').innerHTML = '<p class="small">New codes: ' + j.codes.map(esc).join(' · ') + '</p>';
         if (btn) btn.disabled = false;
       }).catch(showErr);
+    } else if (f.id === 'f-link') {
+      api('POST', '/accounts/link', d).then(boot).then(function () { say('Account added. Now on @' + me.handle); go('/' + me.handle, true); }).catch(showErr);
     } else if (f.id === 'f-claim') {
       api('POST', '/claim/' + f.getAttribute('data-token'), d).then(boot).then(function () { say('Your page is yours.'); go('/' + me.handle, true); }).catch(showErr);
     } else if (f.id === 'f-account') {
       var ea = document.getElementById('err-account'); ea.hidden = true;
       if (!d.password) delete d.password;
-      api('POST', '/admin/accounts', d).then(function (j) {
+      if (!d.email) delete d.email;
+      api('POST', '/accounts', d).then(function (j) {
         var out = document.getElementById('account-out');
         var h = '<div class="box" style="margin-top:12px"><span>Page created: <a class="accent" href="/' + esc(j.user.handle) + '">rsvp.fm/' + esc(j.user.handle) + '</a></span>';
         if (j.claim) h += '<span class="small">Send this activation link so they choose their password:</span><span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(location.origin + '/claim/' + j.claim) + '</span>' +
           '<div><button class="pill" type="button" data-act="copyclaim" data-id="' + esc(j.claim) + '">Copy link</button></div>';
-        else h += '<span class="small">They can log in now with the handle or email and the password you set.</span>';
+        else h += '<span class="small">It is in your accounts: tap your name on your page to switch to it.</span>' +
+          '<div><button class="pill on" type="button" data-act="switchto" data-id="' + esc(j.user.handle) + '">Switch to @' + esc(j.user.handle) + '</button></div>';
         out.innerHTML = h + '</div>';
         f.reset(); if (btn) btn.disabled = false;
       }).catch(function (e) { ea.textContent = e.message; ea.hidden = false; if (btn) btn.disabled = false; });
