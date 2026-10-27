@@ -660,6 +660,23 @@ async function api(request, env, url) {
     return json({ items: items.map((i) => ({ ...i, unread: i.at > seen })) });
   }
 
+  // --- invitations: upcoming events you're on a list for, plus public events announced by pages you follow ---
+  if (path === '/api/invitations' && method === 'GET') {
+    requireUser(me);
+    const rows = (await env.DB.prepare(
+      `${EVENT_SELECT}
+       LEFT JOIN rsvps mine ON mine.event_id = e.id AND mine.user_id = ?1
+       WHERE ${UPCOMING} AND (mine.user_id IS NOT NULL OR e.host_id = ?1
+         OR (e.visibility = 'public' AND e.host_id IN (SELECT followee_id FROM follows WHERE follower_id = ?1)))
+       ORDER BY ${UPCOMING_ORDER} LIMIT 60`
+    ).bind(me.id).all()).results;
+    // the same SELECT can't expose mine.list next to e.*, so look the lists up separately
+    const lists = new Map((await env.DB.prepare('SELECT event_id, list FROM rsvps WHERE user_id = ?').bind(me.id).all()).results.map((r) => [r.event_id, r.list || 'gl']));
+    return json({
+      events: rows.map((e) => ({ ...eventShape(e), my_list: lists.get(e.id) || '', is_host: e.host_id === me.id }))
+    });
+  }
+
   // --- feed ---
   if (path === '/api/feed' && method === 'GET') {
     requireUser(me);

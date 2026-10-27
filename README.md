@@ -15,7 +15,8 @@ Runs entirely on Cloudflare: one Worker (API + static app) and one D1 database.
 - Change your handle from Settings. Old handles keep redirecting to you (pages and referral links don't break) and can't be taken by anyone else.
 - Search (magnifier at the top of the feed, `/search`): people and pages by name, @handle or city, plus public upcoming events.
 - Suggestions: "Suggested for you" at the top of the feed and on the search page — people followed by the people you follow ("Followed by A and B"), then artists and labels. No ranking algorithm, just your network.
-- Follow / unfollow. Feed = posts and reposts from people you follow, newest first. No algorithm.
+- Invitations (home tab): upcoming events you're on a list for (guestlist, friends & family, going), your own events, and public events announced by the pages you follow, soonest first. Empty state invites you to follow artists and labels. Posts and reposts stay on each page.
+- Follow / unfollow. No algorithm.
 - Posts and reposts. Members can post; anyone can repost.
 - Events (labels, promoters, artists): an image, a caption, an optional start and end (date and time). Public (announced to followers and listed on the page) or private (only reachable with the guestlist link). Each event has two lists, each switched on or off by the host: the guestlist and friends & family tickets. Each list has its own link (`rsvp.fm/e/id?k=…`): members who open it are on that list in one tap. Separately, any member can tap "I'm going" on an event they can see. Requests can be allowed per list: members ask in one tap, people without an account leave a name, email and note; the host accepts or declines. No counters anywhere: no follower counts, no "going" counts.
 - Share links carry `?ref=handle`; the guestlist records who brought whom.

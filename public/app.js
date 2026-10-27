@@ -186,17 +186,28 @@
       '<p class="mono" style="margin:0;font-size:13px;line-height:1.8">No ads.<br>No algorithm.<br>No follower counts.<br>Less scrolling, more rendezvous.</p></section>';
   }
 
+  function inviteCard(e) {
+    var tag = e.is_host ? 'Your event' : e.my_list ? (LISTS[e.my_list] || 'Going') : 'From @' + e.host.handle;
+    var onList = e.my_list === 'gl' || e.my_list === 'ff';
+    return '<a href="/e/' + esc(e.id) + '" style="display:block;border-bottom:1px solid var(--line)">' + (e.image ? cover(e, 180) : '') +
+      '<div class="gut" style="padding-block:14px 18px;display:flex;flex-direction:column;gap:6px">' +
+      '<span class="label" style="' + (onList ? 'color:var(--accent)' : '') + '">' + esc(tag) + '</span>' +
+      '<span class="name" style="font-size:17px">' + esc((e.caption || e.title).split('\n')[0]) + '</span>' +
+      '<span class="meta">' + esc(['@' + e.host.handle, whenLine(e)].filter(Boolean).join(' · ')) + '</span></div></a>';
+  }
   function viewFeed() {
     if (!me) return viewWelcome();
     header({ right: '<a class="ico" aria-label="Search" href="/search">' + I.search + '</a>' }); setTab('feed'); loading();
     api('GET', '/session').then(function (j) { unread = !!j.unread; setTab('feed'); }).catch(function () {});
-    api('GET', '/feed').then(function (j) {
-      var h = '<div class="label gut bar">Following · chronological</div>';
-      j.items.forEach(function (p) { h += postHtml(p); });
-      if (!j.items.length) h += '<div class="end">Your feed is empty. Open the pages of artists and labels you like and follow them, or post something.</div>';
-      else h += '<div class="end">You\'re all caught up.</div>';
-      main.innerHTML = '<div id="alert"></div><div id="suggest"></div>' + h;
-      renderSuggestions(document.getElementById('suggest'), j.items.length ? 6 : 12);
+    api('GET', '/invitations').then(function (j) {
+      var h = '<div class="label gut bar">Invitations</div>';
+      if (!j.events.length) {
+        h += '<div class="gut" style="padding-block:40px 24px"><p style="margin:0 0 8px;font-size:17px">You haven\'t been invited to any event yet.</p>' +
+          '<p class="small" style="margin:0 0 16px">You can however follow artists and labels: their next events will show up here.</p>' +
+          '<a class="pill solid" href="/search">Find artists and labels</a></div>';
+      } else j.events.forEach(function (e) { h += inviteCard(e); });
+      main.innerHTML = '<div id="alert"></div>' + h + '<div id="suggest"></div>';
+      renderSuggestions(document.getElementById('suggest'), 12);
       if (me.is_admin) api('GET', '/admin/ambassadors').then(function (a) {
         var el = document.getElementById('alert');
         if (!el || !a.low.length) return;
