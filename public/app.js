@@ -63,7 +63,7 @@
   function pad(n) { return (n < 10 ? '0' : '') + n; }
   function fmtDate(s) { var d = parseLocal(s); return d ? DAYS[d.getDay()] + ' ' + d.getDate() + ' ' + MONTHS[d.getMonth()] : ''; }
   function fmtTime(s) { var d = parseLocal(s); return d ? pad(d.getHours()) + ':' + pad(d.getMinutes()) : (s || ''); }
-  function dateTile(s) { var d = parseLocal(s); return d ? d.getDate() + '\n' + MONTHS[d.getMonth()].toUpperCase() : ''; }
+  function dateTile(s) { var d = parseLocal(s); return d ? '<b>' + d.getDate() + '</b><i>' + MONTHS[d.getMonth()].toUpperCase() + '</i>' : ''; }
   function ago(s) {
     var t = Date.parse(String(s).replace(' ', 'T') + 'Z');
     var m = Math.max(0, Math.round((Date.now() - t) / 60000));
@@ -136,12 +136,12 @@
     return h + '</div></article>';
   }
   function evRow(e, line) {
-    return '<a class="row" href="/e/' + esc(e.id) + '"><span class="date" style="background:' + esc(e.color) + ';color:' + fgFor(e.color) + '">' + (e.starts_at ? dateTile(e.starts_at) : '·') + '</span>' +
+    return '<a class="row" href="/e/' + esc(e.id) + '"><span class="date">' + (e.starts_at ? dateTile(e.starts_at) : '<i>·</i>') + '</span>' +
       '<span style="display:flex;flex-direction:column;gap:2px;min-width:0"><span class="name" style="font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc((e.caption || e.title).split('\n')[0]) + '</span>' +
       '<span class="meta">' + esc(line) + '</span></span></a>';
   }
   function favBtn(u, on) {
-    return '<button class="pill' + (on ? ' on' : '') + '" data-act="fav" data-id="' + esc(u.handle) + '" data-on="' + (on ? 1 : 0) + '" aria-label="' + (on ? 'Remove from favorites' : 'Add to favorites') + '">' + (on ? '★' : '☆') + '</button>';
+    return '<button class="pill' + (on ? ' on' : '') + '" data-act="fav" data-id="' + esc(u.handle) + '" data-on="' + (on ? 1 : 0) + '" aria-label="' + (on ? 'Remove from favourites' : 'Add to favourites') + '">' + (on ? '★' : '☆') + '</button>';
   }
   function followBtn(u, on) {
     return '<button class="pill' + (on ? '' : ' solid') + '" data-act="follow" data-id="' + esc(u.handle) + '" data-on="' + (on ? 1 : 0) + '">' + (on ? 'Following' : 'Follow') + '</button>';
@@ -300,6 +300,39 @@
     input.focus();
   }
 
+  // Pick favourite artists, labels and clubs: the ones you follow, plus a search to find more.
+  function favRow(u) {
+    return '<div class="row" style="gap:12px"><a href="/' + esc(u.handle) + '" style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">' + av(u, 40) +
+      '<span style="display:flex;flex-direction:column;min-width:0"><span class="name">' + esc(u.name) + '</span><span class="meta">@' + esc(u.handle) + ' · ' + esc(kindLabel(u.kind)) + '</span></span></a>' +
+      favBtn(u, !!u.favorite) + '</div>';
+  }
+  function viewFavorites() {
+    if (!me) return needLogin();
+    header({ back: true, title: 'Favourites' }); setTab('me'); loading();
+    api('GET', '/users/' + encodeURIComponent(me.handle)).then(function (j) {
+      var pages = j.following.filter(function (f) { return f.kind !== 'member'; });
+      main.innerHTML = '<div class="gut section"><p class="small" style="margin:0">Star the artists, labels and clubs you love. They show on your page as your favourites.</p>' +
+        '<div class="field"><label for="fq">Find an artist, a label or a club</label><input id="fq" type="search" autocomplete="off" autocapitalize="none" placeholder="Name or @handle"></div></div>' +
+        '<div id="fres"></div>' +
+        '<section class="gut" id="fmine"><span class="label">You follow</span><div>' + (pages.length ? pages.map(favRow).join('') : '<p class="small">No artists or labels yet. Search above.</p>') + '</div></section>';
+      var input = document.getElementById('fq'), out = document.getElementById('fres'), t;
+      input.addEventListener('input', function () {
+        clearTimeout(t);
+        t = setTimeout(function () {
+          var q = input.value.trim();
+          if (!q) { out.innerHTML = ''; return; }
+          api('GET', '/search?q=' + encodeURIComponent(q)).then(function (r) {
+            if (input.value.trim() !== q) return;
+            var favs = {}; j.following.forEach(function (f) { if (f.favorite) favs[f.handle] = 1; });
+            var list = r.users.filter(function (u) { return u.kind !== 'member' && !u.is_me; });
+            out.innerHTML = '<section class="gut" style="padding-bottom:16px"><span class="label">Results</span><div>' +
+              (list.length ? list.map(function (u) { u.favorite = !!favs[u.handle]; return favRow(u); }).join('') : '<p class="small">No artist, label or club matches.</p>') + '</div></section>';
+          }).catch(function () {});
+        }, 220);
+      });
+    }).catch(showError);
+  }
+
   function viewNotifications() {
     if (!me) return needLogin();
     header({ title: 'Activity' }); unread = false; setTab('notifications'); loading();
@@ -359,11 +392,12 @@
         if (!all.length) return;
         var favs = all.filter(function (f) { return f.favorite; });
         var list = (favs.length ? favs : all).slice(0, 8);
-        var title = g[0] === 'member' ? 'Friends' : favs.length ? 'Favorite ' + g[1] : g[2] + ' followed';
+        var title = g[0] === 'member' ? 'Friends' : favs.length ? 'Favourite ' + g[1] : g[2] + ' followed';
         h += '<section class="gut section sep"><h2>' + title + '</h2><div class="grid4">';
         list.forEach(function (f) { h += '<a class="g" href="/' + esc(f.handle) + '">' + av(f, 56) + '<span>' + esc(f.name) + '</span></a>'; });
-        h += '</div>' + (j.is_me && g[0] !== 'member' && !favs.length ? '<p class="small" style="margin:0">Tap ☆ on a page to make it a favorite.</p>' : '') + '</section>';
+        h += '</div></section>';
       });
+      if (j.is_me) h += '<div class="gut" style="padding-block:0 20px"><a class="pill" href="/favorites">☆ Add favourite artists and labels</a></div>';
       h += '<section class="gut section sep" id="wall" data-handle="' + esc(u.handle) + '"><h2>Wall</h2><p class="small" style="margin:0">Loading…</p></section>';
       h += '<div class="sep"><div class="gut" style="padding-top:16px"><h2>Posts</h2></div>';
       j.posts.forEach(function (p) { h += postHtml(p); });
@@ -403,7 +437,7 @@
         '<span class="small">' + ref.total_referred + ' people came through your links' + (ref.total_cents ? ' · estimated, paid by hosts' : '') + '</span></section>';
       else if (ref.total_referred) h += '<section class="box"><span class="label">Your links</span><span style="font-size:28px;font-weight:800">' + ref.total_referred + '</span>' +
         '<span class="small">' + (ref.total_referred === 1 ? 'person' : 'people') + ' RSVP\'d through links you shared</span></section>';
-      h += '<section style="display:flex;flex-direction:column;gap:4px"><h2>Your nights</h2>';
+      h += '<section style="display:flex;flex-direction:column;gap:4px"><h2>Upcoming plans</h2>';
       if (nights.length) nights.forEach(function (e) { h += evRow(e, '@' + e.host.handle + (e.starts_at ? ' · ' + whenLine(e) : '')); });
       else h += '<p class="small" style="margin:0">Nothing yet. RSVP from your feed.</p>';
       el.innerHTML = h + '</section></div>';
@@ -885,6 +919,7 @@
     if (p === '/discover') return go('/', true);
     if (p === '/notifications') return viewNotifications();
     if (p === '/search') return viewSearch();
+    if (p === '/favorites' || p === '/favourites') return viewFavorites();
     if (p === '/new') return viewNew();
     if (p === '/new/event') return viewNewEvent();
     if (p === '/login') return viewLogin();
@@ -927,7 +962,7 @@
       var fon = b.getAttribute('data-on') === '1';
       api(fon ? 'DELETE' : 'POST', '/users/' + id + '/favorite').then(function () {
         b.setAttribute('data-on', fon ? '0' : '1'); b.textContent = fon ? '☆' : '★'; b.classList.toggle('on', !fon);
-        say(fon ? 'Removed from your favorites.' : 'Added to your favorites.');
+        say(fon ? 'Removed from your favourites.' : 'Added to your favourites.');
         if (!fon) { var fb = b.parentNode.querySelector('[data-act=follow]'); if (fb) { fb.setAttribute('data-on', '1'); fb.textContent = 'Following'; fb.classList.remove('solid'); } }
       }).catch(function (e) { say(e.message); }).then(done);
     } else if (act === 'rsvp') {

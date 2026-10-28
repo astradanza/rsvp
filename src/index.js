@@ -86,7 +86,7 @@ const LOW_INVITES = 2;         // admins are alerted when a member has this many
 const RESERVED = new Set([
   'api', 'e', 'new', 'login', 'signup', 'logout', 'discover', 'settings', 'feed', 'about', 'admin',
   'assets', 'static', 'invite', 'invites', 'me', 'help', 'terms', 'privacy', 'rsvp', 'www', 'app',
-  'event', 'events', 'post', 'posts', 'search', 'home', 'index', 'favicon', 'robots', 'root', 'support', 'claim', 'avatars', 'img'
+  'event', 'events', 'post', 'posts', 'search', 'home', 'index', 'favicon', 'robots', 'root', 'support', 'claim', 'avatars', 'img', 'favorites', 'favourites', 'notifications', 'switch'
 ]);
 const HANDLE_RE = /^[a-z0-9_]{2,24}$/;
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
