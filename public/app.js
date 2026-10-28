@@ -16,6 +16,8 @@
   // Page types: stored as member / artist / promoter, shown as Guest / Artist / Label / Promoter.
   var KINDS = { member: 'Guest', artist: 'Artist', promoter: 'Label / Promoter', club: 'Club' };
   function kindLabel(k) { return KINDS[k] || k; }
+  function isPage(u) { return !!u && (u.kind !== 'member' || u.is_admin); }
+
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -138,7 +140,10 @@
   }
   function postHtml(p) {
     var a = p.author, e = p.event, h = '<article class="post gut">';
-    if (p.reposted_by) h += '<div class="rp">' + I.rep.replace(/20/g, '14') + '<span>' + esc(p.reposted_by.name) + ' reposted</span></div>';
+    if (p.reposted_by) {
+      h += '<div class="rp">' + I.rep.replace(/20/g, '14') + '<a href="/' + esc(p.reposted_by.handle) + '">' + esc(p.reposted_by.name) + '</a><span>reposted</span></div>';
+      if (p.repost_comment) h += '<p class="txt" style="margin:0 0 10px;font-size:15px">' + esc(p.repost_comment) + '</p><div style="border-left:2px solid var(--line);padding-left:12px;display:flex;flex-direction:column;gap:10px">';
+    }
     h += '<a class="who" href="/' + esc(a.handle) + '">' + av(a, 36) + '<span style="min-width:0"><span class="name">' + esc(a.name) + '</span><span class="meta">@' + esc(a.handle) + ' · ' + ago(p.created_at) + '</span></span></a>';
     h += '<p class="txt">' + esc(p.text) + '</p>';
     if (e) {
@@ -148,10 +153,10 @@
     h += '<div class="acts">';
     if (e && e.visibility === 'public') h += '<button class="pill' + (e.is_going ? ' on' : '') + '" data-act="rsvp" data-list="going" data-id="' + esc(e.id) + '" data-going="' + (e.is_going ? 1 : 0) + '">' + rsvpLabel(e) + '</button>';
     else if (e) h += '<a class="pill" href="/e/' + esc(e.id) + '">Open</a>';
-    if (!p.mine) h += '<button class="ico' + (p.i_reposted ? ' on' : '') + '" aria-label="Repost" data-act="repost" data-id="' + p.id + '" data-on="' + (p.i_reposted ? 1 : 0) + '">' + I.rep + '</button>';
+    if (!p.mine && me && a.kind !== 'member') h += '<button class="ico' + (p.i_reposted ? ' on' : '') + '" aria-label="Repost" data-act="repost" data-id="' + p.id + '" data-on="' + (p.i_reposted ? 1 : 0) + '">' + I.rep + '</button>';
     if (e) h += '<button class="ico" aria-label="Copy your referral link" data-act="share" data-id="' + esc(e.id) + '">' + I.share + '</button>';
     if (p.mine && !p.reposted_by) h += '<button class="ico" style="margin-left:' + (e ? '0' : 'auto') + '" data-act="delpost" data-id="' + p.id + '">Delete</button>';
-    return h + '</div></article>';
+    return h + '</div>' + (p.reposted_by && p.repost_comment ? '</div>' : '') + '</article>';
   }
   function evRow(e, line) {
     return '<a class="row" href="/e/' + esc(e.id) + '"><span class="date">' + (e.starts_at ? dateTile(e.starts_at) : '<i>·</i>') + '</span>' +
@@ -178,6 +183,7 @@
     nav.hidden = !me;
     var dot = document.getElementById('notif-dot'); if (dot) dot.hidden = !unread || name === 'notifications';
     if (me) document.getElementById('tab-me').setAttribute('href', '/' + me.handle);
+    var pt = nav.querySelector('[data-tab=new]'); if (pt) pt.style.display = isPage(me) ? '' : 'none';
     Array.prototype.forEach.call(nav.querySelectorAll('a'), function (a) { a.classList.toggle('on', a.getAttribute('data-tab') === name); });
   }
   function loading() { main.innerHTML = '<div class="end">Loading…</div>'; }
@@ -194,15 +200,17 @@
         '<span></span><p class="txt" style="color:var(--muted)">' + text + '</p></div>';
     }
     main.innerHTML = '<section class="hero gut">' +
-      '<span class="label">rsvp.fm</span>' +
+      '<span class="label">For labels, promoters, clubs and artists</span>' +
       '<h1>See you there.</h1>' +
-      '<p>A place made for meeting in real life. Follow the artists, labels and promoters you love, know where they play next, and be there.</p>' +
+      '<p>The home of your community, made for meeting in real life. Announce your nights, run your guestlists, feature your artists. Your guests follow you, see what\'s next, and come.</p>' +
       '<div class="acts" style="flex-wrap:wrap"><a class="pill big solid" href="/login">Log in</a></div>' +
-      '<p class="mono" style="margin:0;font-size:12px;color:var(--muted)">By invitation only. Get the link from an artist, a club, a label or a friend.</p></section>' +
+      '<p class="mono" style="margin:0;font-size:12px;color:var(--muted)">By invitation only. Guests get in through the link of an artist, a club or a label.</p></section>' +
       '<section class="gut" style="padding-block:8px 24px">' +
-      step('01', 'Get invited', 'An artist, a club, a label or a friend sends you their link. You join their community and follow them. That\'s the only way in.') +
-      step('02', 'Get in', 'Guestlists, friends &amp; family tickets and other special invitations, straight from the people who run the night.') +
-      step('03', 'Meet', 'See which friends are going, then put your phone away. The point is the dance floor, not the feed.') +
+      step('01', 'Invite your community', 'Send your link. Your people join rsvp.fm and follow you. No one gets in without an invitation.') +
+      step('02', 'Announce', 'Post your nights, or import them from Resident Advisor, Shotgun or DICE in one tap.') +
+      step('03', 'Run the list', 'Guestlists and friends &amp; family tickets, each with its own link. Requests, door check-in, export.') +
+      step('04', 'Feature your artists', 'Labels, promoters and clubs feature the artists they work with. Every artist page shows who features them.') +
+      step('05', 'Meet', 'Your guests see what\'s next, say they\'re going, repost with a word. Then they put their phone away. The point is the dance floor.') +
       '</section>' +
       '<section class="gut" style="padding-block:20px 40px;border-top:1px solid var(--line)">' +
       '<p class="mono" style="margin:0;font-size:13px;line-height:1.8">No ads.<br>No algorithm.<br>No follower counts.<br>Less scrolling, more rendezvous.</p></section>';
@@ -383,7 +391,9 @@
       if (u.banner && /^\/api\/img\//.test(u.banner)) h += '<div class="banner" style="height:160px;background:' + esc(u.color) + ' url(' + esc(u.banner) + ') center/cover no-repeat"></div>';
       else h += '<div class="banner" style="background:' + esc(u.color) + '"><div style="position:absolute;width:120px;height:120px;border-radius:50%;border:3px solid var(--ink);right:24px;top:-40px"></div><div style="position:absolute;width:40px;height:40px;border-radius:50%;background:var(--ink);right:140px;top:40px"></div></div>';
       h += '<div class="gut" style="display:flex;flex-direction:column;gap:10px;padding-block:0 16px"><div class="ptop"><span class="ring">' + av(u, 68) + '</span>' +
-        (j.is_me ? '<a class="pill" href="/settings">Edit page</a>' : (me ? '<span style="display:flex;gap:8px">' + (u.kind !== 'member' ? favBtn(u, j.is_favorite) : '') + followBtn(u, j.is_following) + '</span>' : '<a class="pill solid" href="/login?next=/' + esc(u.handle) + '">Follow</a>')) + '</div>';
+        (j.is_me ? '<a class="pill" href="/settings">Edit page</a>' : (me ? '<span style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">' +
+          (u.kind === 'artist' && (me.kind === 'promoter' || me.kind === 'club') ? '<button class="pill' + (j.i_feature ? ' on' : '') + '" data-act="feature" data-id="' + esc(u.handle) + '" data-on="' + (j.i_feature ? 1 : 0) + '">' + (j.i_feature ? 'Featured ✓' : 'Feature') + '</button>' : '') +
+          (u.kind !== 'member' ? favBtn(u, j.is_favorite) : '') + followBtn(u, j.is_following) + '</span>' : '<a class="pill solid" href="/login?next=/' + esc(u.handle) + '">Follow</a>')) + '</div>';
       h += '<div><h1>' + esc(u.name) + '</h1><div class="mono muted" style="font-size:12px;margin-top:4px">rsvp.fm/' + esc(u.handle) + (u.ambassador ? ' · AMBASSADOR' : '') + '</div></div>';
       if (u.bio) h += '<p class="txt" style="font-size:14px">' + esc(u.bio) + '</p>';
       h += '<div class="stats"><span>' + esc(kindLabel(u.kind)) + (u.city ? ' · ' + esc(u.city) : '') + '</span></div></div>';
@@ -394,6 +404,14 @@
         h += '</div></section>';
       }
       if (j.is_me && u.kind !== 'member') h += '<div class="gut" style="padding-block:0 16px"><a class="pill" href="/new/event">New event</a></div>';
+      function faces(title, list) {
+        if (!list.length) return '';
+        var o = '<section class="gut section sep"><h2>' + title + '</h2><div class="grid4">';
+        list.forEach(function (f) { o += '<a class="g" href="/' + esc(f.handle) + '">' + av(f, 56) + '<span>' + esc(f.name) + '</span></a>'; });
+        return o + '</div></section>';
+      }
+      h += faces('Featured artists', j.featured || []);
+      h += faces('Featured by', j.featured_by || []);
       if (j.past.length) {
         h += '<section class="gut section sep"><h2>Past events</h2><div>';
         j.past.forEach(function (e) { h += evRow(e, whenLine(e)); });
@@ -416,25 +434,25 @@
         h += '</div></section>';
       });
       if (j.is_me) h += '<div class="gut" style="padding-block:0 20px"><a class="pill" href="/favorites">☆ Add favourite artists and labels</a></div>';
-      h += '<section class="gut section sep" id="wall" data-handle="' + esc(u.handle) + '"><h2>Wall</h2><p class="small" style="margin:0">Loading…</p></section>';
-      h += '<div class="sep"><div class="gut" style="padding-top:16px"><h2>Posts</h2></div>';
+      if (u.kind !== 'member') h += '<section class="gut section sep" id="wall" data-handle="' + esc(u.handle) + '"><h2>Wall</h2><p class="small" style="margin:0">Loading…</p></section>';
+      h += '<div class="sep"><div class="gut" style="padding-top:16px"><h2>' + (u.kind === 'member' ? 'Reposts' : 'Posts') + '</h2></div>';
       j.posts.forEach(function (p) { h += postHtml(p); });
-      if (!j.posts.length) h += '<div class="end">No posts yet.</div>';
+      if (!j.posts.length) h += '<div class="end">' + (u.kind === 'member' ? (j.is_me ? 'Repost what artists and labels share, with your comment: it shows here.' : 'No reposts yet.') : 'No posts yet.') + '</div>';
       main.innerHTML = h + '</div>';
       if (j.is_me) renderMine(document.getElementById('mine'));
-      renderWall(u, j.is_me);
+      if (u.kind !== 'member') renderWall(u, j.is_me);
     }).catch(showError);
   }
   function renderWall(u, isMe) {
     var el = document.getElementById('wall'); if (!el) return;
     api('GET', '/wall/' + encodeURIComponent(u.handle)).then(function (j) {
       var h = '<h2>Wall</h2>';
-      if (me) {
+      if (isPage(me)) {
         h += '<form id="f-wall" data-handle="' + esc(u.handle) + '"><div class="field"><label for="walltext">' +
           (isMe ? 'Write on your own wall' : 'Write on ' + esc(u.name) + '\'s wall') + '</label>' +
           '<textarea id="walltext" name="text" rows="2" maxlength="500" required placeholder="' + (isMe ? 'Pin a note for visitors' : 'Say something. Everyone can read it.') + '"></textarea></div>' +
           '<p class="err" id="err" hidden></p><div class="acts"><button class="pill solid" type="submit">Post on the wall</button><span class="small">Public</span></div></form>';
-      } else {
+      } else if (!me) {
         h += '<p class="small" style="margin:0"><a class="accent" href="/login?next=/' + esc(u.handle) + '">Log in</a> to write on this wall.</p>';
       }
       if (!j.items.length) h += '<p class="small" style="margin:0">Nothing here yet.' + (isMe ? ' Your friends can leave you messages here.' : ' Be the first.') + '</p>';
@@ -457,7 +475,7 @@
         '<span class="small">' + (ref.total_referred === 1 ? 'person' : 'people') + ' RSVP\'d through links you shared</span></section>';
       h += '<section style="display:flex;flex-direction:column;gap:4px"><h2>Upcoming plans</h2>';
       if (nights.length) nights.forEach(function (e) { h += evRow(e, '@' + e.host.handle + (e.starts_at ? ' · ' + whenLine(e) : '')); });
-      else h += '<p class="small" style="margin:0">Nothing yet. RSVP from your feed.</p>';
+      else h += '<p class="small" style="margin:0">Nothing yet. Your invitations are in the Invitations tab.</p>';
       el.innerHTML = h + '</section></div>';
     }).catch(function () { el.innerHTML = ''; });
   }
@@ -601,6 +619,10 @@
   function viewNew() {
     if (!me) return needLogin();
     header({ title: 'New post' }); setTab('new');
+    if (!isPage(me)) {
+      main.innerHTML = '<div class="end">Posting is for artists, labels, promoters and clubs. Repost what they share from their pages, with your comment.</div>';
+      return;
+    }
     var h = '<div class="gut section"><form id="f-post"><div class="field"><label for="text">Post to your followers</label>' +
       '<textarea id="text" name="text" rows="6" maxlength="500" placeholder="What\'s on tonight?" required></textarea></div>' +
       '<p class="err" id="err" hidden></p><div class="acts"><button class="pill big solid" type="submit">Post</button></div></form>' +
@@ -984,6 +1006,7 @@
     if (act === 'copyinvite') return copy(inviteUrl(id));
     if (act === 'copyclaim') return copy(location.origin + '/claim/' + id);
     if (act === 'copylink') return copy(id);
+    if (act === 'rpcancel') { var rf = b.closest('form'); if (rf) rf.remove(); return; }
     if (act === 'exportcsv') return exportCsv(id);
     if (!me) return needLogin();
     b.disabled = true;
@@ -993,6 +1016,12 @@
       api(on ? 'DELETE' : 'POST', '/users/' + id + '/follow').then(function () {
         b.setAttribute('data-on', on ? '0' : '1'); b.textContent = on ? 'Follow' : 'Following'; b.classList.toggle('solid', on);
         say(on ? 'Unfollowed @' + id : 'Following @' + id);
+      }).catch(function (e) { say(e.message); }).then(done);
+    } else if (act === 'feature') {
+      var fton = b.getAttribute('data-on') === '1';
+      api(fton ? 'DELETE' : 'POST', '/users/' + id + '/feature').then(function () {
+        b.setAttribute('data-on', fton ? '0' : '1'); b.textContent = fton ? 'Feature' : 'Featured ✓'; b.classList.toggle('on', !fton);
+        say(fton ? 'No longer featured.' : 'Featured on your page.');
       }).catch(function (e) { say(e.message); }).then(done);
     } else if (act === 'fav') {
       var fon = b.getAttribute('data-on') === '1';
@@ -1010,7 +1039,17 @@
       }).catch(function (e) { say(e.message); done(); });
     } else if (act === 'repost') {
       var r = b.getAttribute('data-on') === '1';
-      api(r ? 'DELETE' : 'POST', '/posts/' + id + '/repost').then(function () {
+      if (!r) {
+        // Repost with a comment: a small form under the post
+        var art = b.closest('article'); done();
+        if (!art || art.querySelector('.rpform')) return;
+        art.insertAdjacentHTML('beforeend', '<form class="rpform" data-id="' + esc(id) + '" style="display:flex;flex-direction:column;gap:8px;margin-top:10px">' +
+          '<textarea name="comment" rows="2" maxlength="280" placeholder="Add a comment (optional)"></textarea>' +
+          '<div class="acts"><button class="pill solid" type="submit">Repost to my page</button><button class="pill ghost" type="button" data-act="rpcancel">Cancel</button></div></form>');
+        art.querySelector('.rpform textarea').focus();
+        return;
+      }
+      api('DELETE', '/posts/' + id + '/repost').then(function () {
         b.setAttribute('data-on', r ? '0' : '1'); b.classList.toggle('on', !r); say(r ? 'Repost removed.' : 'Reposted to your followers.');
       }).catch(function (e) { say(e.message); }).then(done);
     } else if (act === 'delpost') {
@@ -1084,6 +1123,12 @@
       var evBack = d.event ? '/e/' + d.event : '';
       api('POST', '/signup', d).then(boot).then(function () {
         say(evBack ? 'Welcome. You\'re on the list.' : 'Welcome to rsvp.fm.'); go(evBack || '/', true);
+      }).catch(showErr);
+    } else if (f.classList.contains('rpform')) {
+      var rid = f.getAttribute('data-id');
+      api('POST', '/posts/' + rid + '/repost', { comment: d.comment || '' }).then(function () {
+        var rb = f.closest('article').querySelector('[data-act=repost]'); if (rb) { rb.setAttribute('data-on', '1'); rb.classList.add('on'); }
+        f.remove(); say('Reposted to your page.');
       }).catch(showErr);
     } else if (f.id === 'f-import') {
       var ie = document.getElementById('imp-err'); if (ie) ie.hidden = true;

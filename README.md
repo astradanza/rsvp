@@ -1,5 +1,7 @@
 # rsvp.fm
 
+Built for labels, promoters, clubs and artists. Guests only follow, see what's next, say they're going, and repost what pages share (with a comment) on their own page.
+
 See you there. A place made for meeting in real life: follow the artists, labels and promoters you love, know where they play next, and be there. No ads, no algorithm, no follower counts, free.
 
 Money features (ticket sales, referral commissions, amounts owed to referrers) are built but hidden at launch: set `MONEY = true` at the top of `public/app.js` to show them.
@@ -17,6 +19,8 @@ Runs entirely on Cloudflare: one Worker (API + static app) and one D1 database.
 - Search (magnifier at the top of the feed, `/search`): people and pages by name, @handle or city, plus public upcoming events.
 - Suggestions: "Suggested for you" at the top of the feed and on the search page — people followed by the people you follow ("Followed by A and B"), then artists and labels. No ranking algorithm, just your network.
 - Invitations (home tab): upcoming events you're on a list for (guestlist, friends & family, going), your own events, and public events announced by the pages you follow, soonest first. Empty state invites you to follow artists and labels. Posts and reposts stay on each page.
+- Roles: artists, labels / promoters and clubs (pages) post, create events and write on walls. Guests can't post: they repost pages' posts with an optional comment, shown on their page under Reposts.
+- Features: labels, promoters and clubs feature artists ("Feature" on the artist's page). The label's page lists its Featured artists; the artist's page shows Featured by. The artist gets a notification.
 - Follow / unfollow. No algorithm.
 - Posts and reposts. Members can post; anyone can repost.
 - Events (labels, promoters, artists): an image, a caption, an optional start and end (date and time). Public (announced to followers and listed on the page) or private (only reachable with the guestlist link). Each event has two lists, each switched on or off by the host: the guestlist and friends & family tickets. Each list has its own link (`rsvp.fm/e/id?k=…`): members who open it are on that list in one tap. Separately, any member can tap "I'm going" on an event they can see. Requests can be allowed per list: members ask in one tap, people without an account leave a name, email and note; the host accepts or declines. No counters anywhere: no follower counts, no "going" counts.

@@ -28,7 +28,9 @@ const ADDED_COLUMNS = [
   ['rsvps', 'list', "TEXT NOT NULL DEFAULT 'gl'"],
   ['rsvps', 'checked_in_at', "TEXT NOT NULL DEFAULT ''"],
   // Favorite artists, labels and clubs shown on a profile
-  ['follows', 'favorite', 'INTEGER NOT NULL DEFAULT 0']
+  ['follows', 'favorite', 'INTEGER NOT NULL DEFAULT 0'],
+  // A repost can carry a comment from whoever reposts it
+  ['reposts', 'comment', "TEXT NOT NULL DEFAULT ''"]
 ];
 // Columns on tables that ensureSchema creates itself, added after those tables exist.
 const LATE_COLUMNS = [
@@ -64,6 +66,10 @@ function ensureSchema(env) {
           name TEXT NOT NULL, email TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
           status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
         env.DB.prepare('CREATE INDEX IF NOT EXISTS guest_requests_event ON guest_requests(event_id, status)'),
+        // Labels, promoters and clubs feature artists; artists show who features them
+        env.DB.prepare(`CREATE TABLE IF NOT EXISTS features (label_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          artist_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')), PRIMARY KEY (label_id, artist_id))`),
         // Old handles keep redirecting to their owner after a rename (migrations/0006_handle_history.sql)
         env.DB.prepare(`CREATE TABLE IF NOT EXISTS handle_history (handle TEXT PRIMARY KEY COLLATE NOCASE,
           user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -286,6 +292,7 @@ async function hydratePosts(env, rows, me) {
     id: r.id, text: r.text, created_at: r.created_at, at: r.at,
     author: byId[r.author_id],
     reposted_by: r.by_id ? byId[r.by_id] : null,
+    repost_comment: r.by_id ? r.comment || '' : '',
     event: r.event_id ? events[r.event_id] || null : null,
     reposts: counts[r.id] || 0,
     i_reposted: mine.has(r.id),
@@ -358,9 +365,9 @@ function lineupNames(text) {
 async function notificationsFor(env, me) {
   const q = (sql, ...args) => env.DB.prepare(sql).bind(...args).all().then((r) => r.results);
   const U = 'u.handle, u.name, u.color, u.avatar, u.kind';
-  const [follows, reposts, wall, joined, guests, requests, answered] = await Promise.all([
+  const [follows, reposts, wall, joined, guests, requests, answered, features] = await Promise.all([
     q(`SELECT f.created_at AS at, ${U} FROM follows f JOIN users u ON u.id = f.follower_id WHERE f.followee_id = ? ORDER BY f.created_at DESC LIMIT 40`, me.id),
-    q(`SELECT r.created_at AS at, p.id AS post_id, substr(p.text, 1, 80) AS text, ${U} FROM reposts r JOIN posts p ON p.id = r.post_id JOIN users u ON u.id = r.user_id
+    q(`SELECT r.created_at AS at, p.id AS post_id, substr(p.text, 1, 80) AS text, r.comment, ${U} FROM reposts r JOIN posts p ON p.id = r.post_id JOIN users u ON u.id = r.user_id
        WHERE p.author_id = ? ORDER BY r.created_at DESC LIMIT 40`, me.id),
     q(`SELECT w.created_at AS at, substr(w.text, 1, 80) AS text, ${U} FROM wall w JOIN users u ON u.id = w.author_id WHERE w.owner_id = ? AND w.author_id != ? ORDER BY w.created_at DESC LIMIT 40`, me.id, me.id),
     q(`SELECT u.created_at AS at, ${U} FROM users u WHERE u.invited_by = ? ORDER BY u.created_at DESC LIMIT 40`, me.id),
@@ -369,13 +376,15 @@ async function notificationsFor(env, me) {
     q(`SELECT g.created_at AS at, g.list, g.name AS req_name, e.id AS event_id, e.title FROM guest_requests g JOIN events e ON e.id = g.event_id
        WHERE e.host_id = ? AND g.status = 'pending' ORDER BY g.created_at DESC LIMIT 40`, me.id),
     q(`SELECT g.created_at AS at, g.list, e.id AS event_id, e.title FROM guest_requests g JOIN events e ON e.id = g.event_id
-       WHERE g.email = ? AND g.status = 'approved' ORDER BY g.created_at DESC LIMIT 20`, me.email)
+       WHERE g.email = ? AND g.status = 'approved' ORDER BY g.created_at DESC LIMIT 20`, me.email),
+    q(`SELECT f.created_at AS at, ${U} FROM features f JOIN users u ON u.id = f.label_id WHERE f.artist_id = ? ORDER BY f.created_at DESC LIMIT 40`, me.id)
   ]);
   const who = (r) => ({ handle: r.handle, name: r.name, color: r.color, avatar: r.avatar || '', kind: r.kind });
   const listWord = (l) => (l === 'ff' ? 'took a friends & family ticket for' : l === 'gl' ? 'joined the guestlist for' : 'is going to');
   const items = [
     ...follows.map((r) => ({ at: r.at, actor: who(r), text: 'followed you', link: '/' + r.handle })),
-    ...reposts.map((r) => ({ at: r.at, actor: who(r), text: 'reposted: ' + r.text, link: '/' + me.handle })),
+    ...reposts.map((r) => ({ at: r.at, actor: who(r), text: 'reposted' + (r.comment ? ' with “' + r.comment.slice(0, 80) + '”' : '') + ': ' + r.text, link: '/' + r.handle })),
+    ...features.map((r) => ({ at: r.at, actor: who(r), text: 'featured you', link: '/' + r.handle })),
     ...wall.map((r) => ({ at: r.at, actor: who(r), text: 'wrote on your wall: ' + r.text, link: '/' + me.handle })),
     ...joined.map((r) => ({ at: r.at, actor: who(r), text: 'joined rsvp.fm with your invite link', link: '/' + r.handle })),
     ...guests.map((r) => ({ at: r.at, actor: who(r), text: listWord(r.list) + ' ' + r.title, link: '/e/' + r.event_id })),
@@ -703,10 +712,10 @@ async function api(request, env, url) {
     const rows = (await env.DB.prepare(
       `WITH net AS (SELECT followee_id AS uid FROM follows WHERE follower_id = ?1 UNION SELECT ?1)
        SELECT * FROM (
-         SELECT p.id, p.text, p.event_id, p.created_at, p.author_id, NULL AS by_id, p.created_at AS at
+         SELECT p.id, p.text, p.event_id, p.created_at, p.author_id, NULL AS by_id, p.created_at AS at, '' AS comment
            FROM posts p WHERE p.author_id IN (SELECT uid FROM net)
          UNION ALL
-         SELECT p.id, p.text, p.event_id, p.created_at, p.author_id, r.user_id AS by_id, r.created_at AS at
+         SELECT p.id, p.text, p.event_id, p.created_at, p.author_id, r.user_id AS by_id, r.created_at AS at, r.comment
            FROM reposts r JOIN posts p ON p.id = r.post_id
            WHERE r.user_id IN (SELECT uid FROM net) AND p.author_id NOT IN (SELECT uid FROM net)
        ) WHERE at < ?2 ORDER BY at DESC LIMIT 40`
@@ -764,18 +773,34 @@ async function api(request, env, url) {
       const fav = me && !isMe ? await env.DB.prepare('SELECT favorite FROM follows WHERE follower_id = ? AND followee_id = ?').bind(me.id, u.id).first() : null;
       const rows = (await env.DB.prepare(
         `SELECT * FROM (
-           SELECT p.id, p.text, p.event_id, p.created_at, p.author_id, NULL AS by_id, p.created_at AS at FROM posts p WHERE p.author_id = ?1
+           SELECT p.id, p.text, p.event_id, p.created_at, p.author_id, NULL AS by_id, p.created_at AS at, '' AS comment FROM posts p WHERE p.author_id = ?1
            UNION ALL
-           SELECT p.id, p.text, p.event_id, p.created_at, p.author_id, r.user_id AS by_id, r.created_at AS at
+           SELECT p.id, p.text, p.event_id, p.created_at, p.author_id, r.user_id AS by_id, r.created_at AS at, r.comment
              FROM reposts r JOIN posts p ON p.id = r.post_id WHERE r.user_id = ?1
          ) ORDER BY at DESC LIMIT 40`
       ).bind(u.id).all()).results;
+      // Labels, promoters and clubs feature artists; an artist's page shows who features them.
+      const featured = u.kind === 'promoter' || u.kind === 'club'
+        ? (await env.DB.prepare('SELECT u.* FROM features f JOIN users u ON u.id = f.artist_id WHERE f.label_id = ? ORDER BY f.created_at').bind(u.id).all()).results.map(publicUser) : [];
+      const featuredBy = u.kind === 'artist'
+        ? (await env.DB.prepare('SELECT u.* FROM features f JOIN users u ON u.id = f.label_id WHERE f.artist_id = ? ORDER BY f.created_at').bind(u.id).all()).results.map(publicUser) : [];
+      const iFeature = !!me && u.kind === 'artist' && !!(await env.DB.prepare('SELECT 1 FROM features WHERE label_id = ? AND artist_id = ?').bind(me.id, u.id).first());
       return json({
         user: publicUser(u),
+        featured, featured_by: featuredBy, i_feature: iFeature,
         is_following: isFollowing, is_me: !!me && me.id === u.id,
         is_favorite: !!(fav && fav.favorite),
         events, past, attended, following, posts: await hydratePosts(env, rows, me)
       });
+    }
+    if (seg[2] === 'feature') {
+      requireUser(me);
+      if (me.kind !== 'promoter' && me.kind !== 'club') fail(403, 'Only labels, promoters and clubs can feature artists.');
+      if (u.kind !== 'artist') fail(400, 'Only artists can be featured.');
+      if (method === 'POST') await env.DB.prepare('INSERT OR IGNORE INTO features (label_id, artist_id) VALUES (?, ?)').bind(me.id, u.id).run();
+      else if (method === 'DELETE') await env.DB.prepare('DELETE FROM features WHERE label_id = ? AND artist_id = ?').bind(me.id, u.id).run();
+      else fail(405, 'Method not allowed.');
+      return json({ featured: method === 'POST' });
     }
     if (seg[2] === 'favorite') {
       requireUser(me);
@@ -825,6 +850,8 @@ async function api(request, env, url) {
     }
     if (seg.length === 2 && method === 'POST') {
       requireUser(me);
+      if (me.kind === 'member' && !me.is_admin) fail(403, 'Walls are for artists, labels, promoters and clubs.');
+      if (u.kind === 'member') fail(403, 'Only pages have a wall.');
       const b = await body(request);
       const text = str(b.text, 500);
       if (!text) fail(400, 'Write something first.');
@@ -848,6 +875,7 @@ async function api(request, env, url) {
   // --- posts ---
   if (path === '/api/posts' && method === 'POST') {
     requireUser(me);
+    if (me.kind === 'member' && !me.is_admin) fail(403, 'Posting is for artists, labels, promoters and clubs. You can repost what they share, with a comment.');
     const b = await body(request);
     const text = str(b.text, 500);
     if (!text) fail(400, 'Write something first.');
@@ -872,7 +900,12 @@ async function api(request, env, url) {
     }
     if (seg[2] === 'repost') {
       if (post.author_id === me.id) fail(400, 'You already posted this.');
-      if (method === 'POST') await env.DB.prepare('INSERT OR IGNORE INTO reposts (post_id, user_id) VALUES (?, ?)').bind(post.id, me.id).run();
+      if (method === 'POST') {
+        const author = await env.DB.prepare('SELECT kind FROM users WHERE id = ?').bind(post.author_id).first();
+        if (!author || author.kind === 'member') fail(403, 'Only posts by artists, labels, promoters and clubs can be reposted.');
+        const comment = str((await body(request)).comment, 280);
+        await env.DB.prepare('INSERT INTO reposts (post_id, user_id, comment) VALUES (?, ?, ?) ON CONFLICT(post_id, user_id) DO UPDATE SET comment = excluded.comment, created_at = datetime(\'now\')').bind(post.id, me.id, comment).run();
+      }
       else if (method === 'DELETE') await env.DB.prepare('DELETE FROM reposts WHERE post_id = ? AND user_id = ?').bind(post.id, me.id).run();
       else fail(405, 'Method not allowed.');
       return json({ reposted: method === 'POST' });
