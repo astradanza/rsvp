@@ -100,8 +100,8 @@
   }
   // An event's picture: the uploaded image, or a plain block with the first line of the caption.
   function cover(e, h, big) {
-    if (e.image && /^\/api\/img\//.test(e.image)) {
-      return '<img src="' + esc(e.image) + '" alt="" loading="lazy" style="display:block;width:100%;max-height:' + (big ? 560 : 420) + 'px;object-fit:cover;background:var(--surface)">';
+    if (e.image && /^(\/api\/img\/|https:\/\/)/.test(e.image)) {
+      return '<img src="' + esc(e.image) + '" alt="" loading="lazy" referrerpolicy="no-referrer" style="display:block;width:100%;max-height:' + (big ? 560 : 420) + 'px;object-fit:cover;background:var(--surface)">';
     }
     var first = (e.caption || e.title || '').split('\n')[0];
     return '<div class="cover" style="height:' + h + 'px;background:var(--surface);border-bottom:1px solid var(--line)">' +
@@ -460,6 +460,7 @@
         (e.visibility === 'private' ? ' · private' : '') + '</span></span></a>';
       if (e.starts_at) h += '<div class="mono" style="font-size:13px">' + whenLine(e) + '</div>';
       h += '<p class="txt">' + esc(e.caption) + '</p>';
+      if (e.ticket_url) h += '<a class="pill big" href="' + esc(e.ticket_url) + '" target="_blank" rel="noopener noreferrer" style="align-self:flex-start">Tickets &amp; info' + (e.ticket_source ? ' on ' + esc(e.ticket_source) : '') + ' ↗</a>';
       if (e.friends.length) h += '<div style="display:flex;align-items:center;gap:10px"><div class="faces">' + e.friends.map(function (f) { return '<span class="ring">' + av(f, 26) + '</span>'; }).join('') +
         '</div><span class="small" style="margin-left:8px">' + e.friends.map(function (f) { return esc(f.name); }).join(', ') + ' ' + (e.friends.length > 1 ? 'are' : 'is') + ' going</span></div>';
 
@@ -603,7 +604,7 @@
     var priv = v.visibility === 'private';
     return '<div class="gut section"><form id="f-event"' + (editId ? ' data-id="' + esc(editId) + '"' : '') + '>' +
       '<div class="field"><span class="label">Image</span><div id="ev-img" style="border:1px solid var(--line);border-radius:var(--r);overflow:hidden">' +
-      (v.image ? '<img src="' + esc(v.image) + '" alt="" style="display:block;width:100%;max-height:420px;object-fit:cover">' : '<div class="small" style="padding:28px 14px;text-align:center">No image yet</div>') + '</div>' +
+      (v.image ? '<img src="' + esc(v.image) + '" alt="" referrerpolicy="no-referrer" style="display:block;width:100%;max-height:420px;object-fit:cover">' : '<div class="small" style="padding:28px 14px;text-align:center">No image yet</div>') + '</div>' +
       '<input type="hidden" name="image" value="' + esc(v.image || '') + '">' +
       '<div class="acts"><label class="pill" for="up-event" style="cursor:pointer">' + (v.image ? 'Replace image' : 'Upload an image') + '</label>' +
       '<input id="up-event" type="file" accept="image/*" data-kind="event" hidden>' +
@@ -611,6 +612,7 @@
       '<div class="field"><label for="caption">Caption</label><textarea id="caption" name="caption" rows="8" maxlength="2000" required placeholder="Name of the night, where, who plays, anything you want to say.">' + esc(v.caption || '') + '</textarea></div>' +
       '<div class="two"><div class="field"><label for="starts_at">Starts (optional)</label><input id="starts_at" name="starts_at" type="datetime-local" value="' + esc((v.starts_at || '').slice(0, 16)) + '"></div>' +
       '<div class="field"><label for="ends_at">Ends (optional)</label><input id="ends_at" name="ends_at" type="datetime-local" value="' + esc(/^\d{4}-/.test(v.ends_at || '') ? v.ends_at.slice(0, 16) : '') + '"></div></div>' +
+      '<div class="field"><label for="ticket_url">Tickets / more info link (optional)</label><input id="ticket_url" name="ticket_url" type="url" inputmode="url" autocapitalize="none" placeholder="https://ra.co/events/…" value="' + esc(v.ticket_url || '') + '"></div>' +
       '<fieldset><legend class="field">Who can see it</legend><div class="seg">' +
       '<label><input type="radio" name="visibility" value="public"' + (priv ? '' : ' checked') + '><span>Public</span></label>' +
       '<label><input type="radio" name="visibility" value="private"' + (priv ? ' checked' : '') + '><span>Private · link only</span></label></div></fieldset>' +
@@ -644,7 +646,15 @@
     }
     var q = new URLSearchParams(location.search), v = {};
     q.forEach(function (val, key) { v[key] = val; });
-    main.innerHTML = eventForm(v, null);
+    main.innerHTML = importBox() + eventForm(v, null);
+  }
+  // Paste a Resident Advisor, Shotgun, DICE… link: the form fills itself, tickets and info stay on that page.
+  function importBox(note) {
+    return '<div class="gut section" style="padding-bottom:0"><form id="f-import" class="box"><span class="label">Import from a link</span>' +
+      '<p class="small" style="margin:0">Already on Resident Advisor, Shotgun, DICE, Eventbrite, Ticket Fairy…? Paste the event link: the image, date, venue and line-up are copied here, and the tickets button points back to that page.</p>' +
+      '<div class="field"><label for="imp-url" class="sr">Event link</label><input id="imp-url" name="url" type="url" inputmode="url" autocapitalize="none" autocomplete="off" required placeholder="https://ra.co/events/…"></div>' +
+      '<p class="err" id="imp-err" hidden></p>' + (note ? '<p class="small" style="margin:0;color:var(--fg)">' + note + '</p>' : '') +
+      '<div class="acts"><button class="pill solid" type="submit">Import</button></div></form></div>';
   }
 
   // Door mode: one list of everyone (all lists), search, tap to check in.
@@ -1049,6 +1059,18 @@
       api('POST', '/signup', d).then(boot).then(function () {
         say(evBack ? 'Welcome. You\'re on the list.' : 'Welcome to rsvp.fm.'); go(evBack || '/', true);
       }).catch(showErr);
+    } else if (f.id === 'f-import') {
+      var ie = document.getElementById('imp-err'); if (ie) ie.hidden = true;
+      if (btn) btn.textContent = 'Reading the page…';
+      api('POST', '/import', { url: d.url }).then(function (r) {
+        var v = { caption: r.caption, starts_at: r.starts_at, ends_at: r.ends_at, image: r.image, ticket_url: r.ticket_url, visibility: 'public', gl_on: 0 };
+        main.innerHTML = importBox('Imported from ' + esc(r.source) + '. Check the details, then publish.' + (r.starts_at ? '' : ' Add the date: it was not on the page.')) + eventForm(v, null);
+        document.getElementById('imp-url').value = d.url;
+        var cap = document.getElementById('caption'); if (cap) cap.scrollIntoView({ block: 'center' });
+      }).catch(function (e2) {
+        if (btn) { btn.disabled = false; btn.textContent = 'Import'; }
+        if (ie) { ie.textContent = e2.message; ie.hidden = false; } else say(e2.message);
+      });
     } else if (f.id === 'f-code') {
       go('/i/' + String(d.code || '').trim().toLowerCase().replace(/^.*\/i\//, '').replace(/[^a-z0-9]/g, ''));
     } else if (f.id === 'f-accept') {

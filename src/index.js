@@ -1,5 +1,6 @@
 // rsvp.fm — Cloudflare Worker: JSON API under /api, static app for everything else.
 import { SCHEMA } from './schema.js';
+import { importEvent, captionFrom, sourceName } from './importer.js';
 
 // Create the tables on first use (idempotent), so a plain `wrangler deploy` is enough.
 // Columns added after launch: added here if missing (mirrors migrations/0002_invite_links.sql).
@@ -229,12 +230,13 @@ function captionOf(e) {
   const where = [e.venue, e.city].filter(Boolean).join(', ');
   return [head, where, e.about, e.lineup ? 'Line-up:\n' + e.lineup : ''].filter(Boolean).join('\n\n');
 }
+function sourceOf(u) { try { return sourceName(new URL(u).hostname); } catch { return ''; } }
 function eventShape(e) {
   return {
     id: e.id, title: e.title, subtitle: e.subtitle, starts_at: e.starts_at, ends_at: e.ends_at,
     venue: e.venue, city: e.city, entry: e.entry, price_cents: e.price_cents, currency: e.currency,
     commission_pct: e.commission_pct, capacity: e.capacity, lineup: e.lineup, about: e.about, color: e.color,
-    ticket_url: e.ticket_url || '',
+    ticket_url: e.ticket_url || '', ticket_source: e.ticket_url ? sourceOf(e.ticket_url) : '',
     image: e.image || '', caption: captionOf(e), visibility: e.visibility || 'public', allow_requests: !!e.allow_requests,
     gl_on: e.gl_on == null ? true : !!e.gl_on, ff_on: !!e.ff_on, ff_requests: !!e.ff_requests,
     host: { handle: e.host_handle, name: e.host_name, color: e.host_color, kind: e.host_kind, avatar: e.host_avatar || '' }
@@ -301,13 +303,17 @@ async function simpleEventFields(env, me, b) {
   if (ends && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(ends)) fail(400, 'Pick a valid end date and time, or leave it empty.');
   if (ends && !starts) fail(400, 'Add a start date before the end.');
   if (ends && ends.slice(0, 16) <= starts.slice(0, 16)) fail(400, 'The end must be after the start.');
-  let image = str(b.image, 80);
-  if (image) {
+  // An uploaded image, or an image hosted elsewhere (imported from a ticketing page)
+  let image = String(b.image || '').trim().slice(0, 800);
+  if (image && /^https:\/\/[^\s"'<>]+$/.test(image)) { /* external, kept as a link */ }
+  else if (image) {
     const m = /^\/api\/img\/([a-z0-9]+)$/.exec(image);
     if (!m || !(await env.DB.prepare('SELECT 1 FROM images WHERE id = ? AND owner_id = ?').bind(m[1], me.id).first())) image = '';
   }
+  const ticketUrl = String(b.ticket_url || '').trim().slice(0, 800);
+  if (ticketUrl && !/^https?:\/\/[^\s"'<>]+\.[^\s"'<>]+$/.test(ticketUrl)) fail(400, 'The tickets / more info link must start with https://');
   return {
-    caption, image, starts_at: starts ? starts.slice(0, 16) : '', ends_at: ends ? ends.slice(0, 16) : '',
+    caption, image, ticket_url: ticketUrl.replace(/^http:/, 'https:'), starts_at: starts ? starts.slice(0, 16) : '', ends_at: ends ? ends.slice(0, 16) : '',
     title: caption.split('\n')[0].slice(0, 80),
     visibility: b.visibility === 'private' ? 'private' : 'public',
     gl_on: b.gl_on ? 1 : 0,
@@ -874,16 +880,28 @@ async function api(request, env, url) {
   }
 
   // --- events ---
+  // Read an event from a ticketing page (Resident Advisor, Shotgun, DICE…) to prefill the event form.
+  if (path === '/api/import' && method === 'POST') {
+    requireUser(me);
+    if (me.kind === 'member' && !me.is_admin) fail(403, 'Switch your page to Artist, Label / Promoter or Club in Settings to create events.');
+    const b = await body(request);
+    let d;
+    try { d = await importEvent(b.url); } catch (e) { fail(422, e.message || 'Could not read that page.'); }
+    return json({
+      caption: captionFrom(d), starts_at: d.starts_at, ends_at: d.ends_at && d.ends_at > d.starts_at ? d.ends_at : '',
+      image: d.image, ticket_url: d.ticket_url, source: d.source
+    });
+  }
   if (path === '/api/events' && method === 'POST') {
     requireUser(me);
     if (me.kind === 'member' && !me.is_admin) fail(403, 'Switch your page to Label / Promoter or Artist in Settings to create events.');
     const f = await simpleEventFields(env, me, await body(request));
     const id = randomCode(8);
     await env.DB.prepare(
-      `INSERT INTO events (id, host_id, title, starts_at, ends_at, color, image, caption, visibility, allow_requests, gl_token, gl_on, ff_on, ff_requests, ff_token)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO events (id, host_id, title, starts_at, ends_at, color, image, caption, visibility, allow_requests, gl_token, gl_on, ff_on, ff_requests, ff_token, ticket_url)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(id, me.id, f.title, f.starts_at, f.ends_at, me.color, f.image, f.caption, f.visibility, f.allow_requests, randomCode(12),
-      f.gl_on, f.ff_on, f.ff_requests, randomCode(12)).run();
+      f.gl_on, f.ff_on, f.ff_requests, randomCode(12), f.ticket_url).run();
     // Public nights are announced to followers; private ones only travel by their guestlist link.
     if (f.visibility === 'public') {
       await env.DB.prepare('INSERT INTO posts (author_id, text, event_id) VALUES (?, ?, ?)').bind(me.id, f.caption.slice(0, 500), id).run();
@@ -937,8 +955,8 @@ async function api(request, env, url) {
       const f = await simpleEventFields(env, me, await body(request));
       await env.DB.prepare(
         `UPDATE events SET title = ?, subtitle = '', starts_at = ?, ends_at = ?, image = ?, caption = ?, visibility = ?, allow_requests = ?,
-         gl_on = ?, ff_on = ?, ff_requests = ?, venue = '', city = '', lineup = '', about = '' WHERE id = ?`
-      ).bind(f.title, f.starts_at, f.ends_at, f.image, f.caption, f.visibility, f.allow_requests, f.gl_on, f.ff_on, f.ff_requests, ev.id).run();
+         gl_on = ?, ff_on = ?, ff_requests = ?, ticket_url = ?, venue = '', city = '', lineup = '', about = '' WHERE id = ?`
+      ).bind(f.title, f.starts_at, f.ends_at, f.image, f.caption, f.visibility, f.allow_requests, f.gl_on, f.ff_on, f.ff_requests, f.ticket_url, ev.id).run();
       if (!ev.gl_token) await env.DB.prepare('UPDATE events SET gl_token = ? WHERE id = ?').bind(randomCode(12), ev.id).run();
       if (!ev.ff_token) await env.DB.prepare('UPDATE events SET ff_token = ? WHERE id = ?').bind(randomCode(12), ev.id).run();
       return json({ id: ev.id });

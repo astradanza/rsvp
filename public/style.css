@@ -118,3 +118,4 @@ td,th{padding:8px 0;border-bottom:1px solid var(--line);text-align:left;font-wei
 th{font:11px var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:1px}
 td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
 @media (prefers-reduced-motion:no-preference){.toast{animation:up .2s ease-out}@keyframes up{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
