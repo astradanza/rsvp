@@ -24,6 +24,8 @@ const ADDED_COLUMNS = [
   ['events', 'gl_on', 'INTEGER NOT NULL DEFAULT 1'],
   ['events', 'ff_on', 'INTEGER NOT NULL DEFAULT 0'],
   ['events', 'ff_requests', 'INTEGER NOT NULL DEFAULT 0'],
+  // The special price of friends & family tickets, as the host writes it ("€10", "Free", "€15 instead of €30")
+  ['events', 'ff_price', "TEXT NOT NULL DEFAULT ''"],
   ['events', 'ff_token', "TEXT NOT NULL DEFAULT ''"],
   ['rsvps', 'list', "TEXT NOT NULL DEFAULT 'gl'"],
   ['rsvps', 'checked_in_at', "TEXT NOT NULL DEFAULT ''"],
@@ -244,7 +246,7 @@ function eventShape(e) {
     commission_pct: e.commission_pct, capacity: e.capacity, lineup: e.lineup, about: e.about, color: e.color,
     ticket_url: e.ticket_url || '', ticket_source: e.ticket_url ? sourceOf(e.ticket_url) : '',
     image: e.image || '', caption: captionOf(e), visibility: e.visibility || 'public', allow_requests: !!e.allow_requests,
-    gl_on: e.gl_on == null ? true : !!e.gl_on, ff_on: !!e.ff_on, ff_requests: !!e.ff_requests,
+    gl_on: e.gl_on == null ? true : !!e.gl_on, ff_on: !!e.ff_on, ff_requests: !!e.ff_requests, ff_price: e.ff_price || '',
     host: { handle: e.host_handle, name: e.host_name, color: e.host_color, kind: e.host_kind, avatar: e.host_avatar || '' }
   };
 }
@@ -326,7 +328,8 @@ async function simpleEventFields(env, me, b) {
     gl_on: b.gl_on ? 1 : 0,
     allow_requests: b.gl_on && b.allow_requests ? 1 : 0,
     ff_on: b.ff_on ? 1 : 0,
-    ff_requests: b.ff_on && b.ff_requests ? 1 : 0
+    ff_requests: b.ff_on && b.ff_requests ? 1 : 0,
+    ff_price: b.ff_on ? str(b.ff_price, 40) : ''
   };
 }
 
@@ -931,10 +934,10 @@ async function api(request, env, url) {
     const f = await simpleEventFields(env, me, await body(request));
     const id = randomCode(8);
     await env.DB.prepare(
-      `INSERT INTO events (id, host_id, title, starts_at, ends_at, color, image, caption, visibility, allow_requests, gl_token, gl_on, ff_on, ff_requests, ff_token, ticket_url)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO events (id, host_id, title, starts_at, ends_at, color, image, caption, visibility, allow_requests, gl_token, gl_on, ff_on, ff_requests, ff_token, ticket_url, ff_price)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(id, me.id, f.title, f.starts_at, f.ends_at, me.color, f.image, f.caption, f.visibility, f.allow_requests, randomCode(12),
-      f.gl_on, f.ff_on, f.ff_requests, randomCode(12), f.ticket_url).run();
+      f.gl_on, f.ff_on, f.ff_requests, randomCode(12), f.ticket_url, f.ff_price).run();
     // Public nights are announced to followers; private ones only travel by their guestlist link.
     if (f.visibility === 'public') {
       await env.DB.prepare('INSERT INTO posts (author_id, text, event_id) VALUES (?, ?, ?)').bind(me.id, f.caption.slice(0, 500), id).run();
@@ -988,8 +991,8 @@ async function api(request, env, url) {
       const f = await simpleEventFields(env, me, await body(request));
       await env.DB.prepare(
         `UPDATE events SET title = ?, subtitle = '', starts_at = ?, ends_at = ?, image = ?, caption = ?, visibility = ?, allow_requests = ?,
-         gl_on = ?, ff_on = ?, ff_requests = ?, ticket_url = ?, venue = '', city = '', lineup = '', about = '' WHERE id = ?`
-      ).bind(f.title, f.starts_at, f.ends_at, f.image, f.caption, f.visibility, f.allow_requests, f.gl_on, f.ff_on, f.ff_requests, f.ticket_url, ev.id).run();
+         gl_on = ?, ff_on = ?, ff_requests = ?, ticket_url = ?, ff_price = ?, venue = '', city = '', lineup = '', about = '' WHERE id = ?`
+      ).bind(f.title, f.starts_at, f.ends_at, f.image, f.caption, f.visibility, f.allow_requests, f.gl_on, f.ff_on, f.ff_requests, f.ticket_url, f.ff_price, ev.id).run();
       if (!ev.gl_token) await env.DB.prepare('UPDATE events SET gl_token = ? WHERE id = ?').bind(randomCode(12), ev.id).run();
       if (!ev.ff_token) await env.DB.prepare('UPDATE events SET ff_token = ? WHERE id = ?').bind(randomCode(12), ev.id).run();
       return json({ id: ev.id });

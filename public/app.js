@@ -79,10 +79,17 @@
   function rsvpLabelOld(e) { return e.is_going ? (e.entry === 'ticket' ? 'Going' : 'On the list') : (e.entry === 'ticket' ? 'Get ticket' : 'RSVP'); }
   function shareLink(id) { return location.origin + '/e/' + id + (me ? '?ref=' + me.handle : ''); }
   // Invite people: the phone's share sheet (WhatsApp, Messages, Mail, Instagram…), or straight to WhatsApp, SMS or email.
+  // The community offers of an event: guestlist, friends & family tickets at a special price
+  function offersOf(e) {
+    var o = [];
+    if (e.gl_on) o.push(['Guestlist', e.visibility === 'public' ? 'Free entry · join from this page' + (e.allow_requests ? ' or ask' : '') : 'Free entry · by invitation' + (e.allow_requests ? ' or ask' : '')]);
+    if (e.ff_on) o.push(['Friends & family ticket', (e.ff_price ? e.ff_price + ' · ' : 'Special price · ') + (e.ff_requests ? 'by invitation or ask' : 'by invitation')]);
+    return o;
+  }
   function inviteText(e, list) {
     var title = (e.caption || e.title || '').split('\n')[0];
     var when = e.starts_at ? ' on ' + fmtDate(e.starts_at) : '';
-    if (list === 'ff') return e.host.name + ' invites you to ' + title + when + ': a friends & family ticket is waiting for you. Confirm your name here:';
+    if (list === 'ff') return e.host.name + ' invites you to ' + title + when + ': a friends & family ticket' + (e.ff_price ? ' at ' + e.ff_price : '') + ' is waiting for you. Confirm your name here:';
     if (list === 'gl') return e.host.name + ' invites you to the guestlist of ' + title + when + '. Confirm your name here:';
     return title + when + ', see you there?';
   }
@@ -202,15 +209,15 @@
     main.innerHTML = '<section class="hero gut">' +
       '<span class="label">For labels, promoters, clubs and artists</span>' +
       '<h1>See you there.</h1>' +
-      '<p>The home of your community, made for meeting in real life. Announce your nights, run your guestlists, feature your artists. Your guests follow you, see what\'s next, and come.</p>' +
+      '<p>Clubs and artists keep guestlist spots and special-price tickets for the people close to them. rsvp.fm is where you stay in touch with that community and give them those invitations. It doesn\'t replace your ticketing: it\'s the side door for your people.</p>' +
       '<div class="acts" style="flex-wrap:wrap"><a class="pill big solid" href="/login">Log in</a></div>' +
       '<p class="mono" style="margin:0;font-size:12px;color:var(--muted)">By invitation only. Guests get in through the link of an artist, a club or a label.</p></section>' +
       '<section class="gut" style="padding-block:8px 24px">' +
-      step('01', 'Invite your community', 'Send your link. Your people join rsvp.fm and follow you. No one gets in without an invitation.') +
-      step('02', 'Announce', 'Post your nights, or import them from Resident Advisor, Shotgun or DICE in one tap.') +
-      step('03', 'Run the list', 'Guestlists and friends &amp; family tickets, each with its own link. Requests, door check-in, export.') +
-      step('04', 'Feature your artists', 'Labels, promoters and clubs feature the artists they work with. Every artist page shows who features them.') +
-      step('05', 'Meet', 'Your guests see what\'s next, say they\'re going, repost with a word. Then they put their phone away. The point is the dance floor.') +
+      step('01', 'Gather your people', 'Send your link to your regulars, friends and crew. They join rsvp.fm and follow you. No one gets in without an invitation.') +
+      step('02', 'Give them a way in', 'Guestlist spots and friends &amp; family tickets at a special price, each with its own link. Requests, door check-in, export.') +
+      step('03', 'Keep your ticketing', 'Import your nights from Resident Advisor, Shotgun or DICE in one tap. Regular tickets stay there; rsvp.fm only carries what you keep for your community.') +
+      step('04', 'Bring your artists in', 'Labels, promoters and clubs feature the artists they work with; every artist page shows who features them. Artists bring their own people.') +
+      step('05', 'See you there', 'Your community sees every offer meant for them, says they\'re going, and puts the phone away. The point is the dance floor.') +
       '</section>' +
       '<section class="gut" style="padding-block:20px 40px;border-top:1px solid var(--line)">' +
       '<p class="mono" style="margin:0;font-size:13px;line-height:1.8">No ads.<br>No algorithm.<br>No follower counts.<br>Less scrolling, more rendezvous.</p></section>';
@@ -223,7 +230,8 @@
       '<div class="gut" style="padding-block:14px 18px;display:flex;flex-direction:column;gap:6px">' +
       '<span class="label" style="' + (onList ? 'color:var(--accent)' : '') + '">' + esc(tag) + '</span>' +
       '<span class="name" style="font-size:17px">' + esc((e.caption || e.title).split('\n')[0]) + '</span>' +
-      '<span class="meta">' + esc(['@' + e.host.handle, whenLine(e)].filter(Boolean).join(' · ')) + '</span></div></a>';
+      '<span class="meta">' + esc(['@' + e.host.handle, whenLine(e)].filter(Boolean).join(' · ')) + '</span>' +
+      (offersOf(e).length ? '<span class="mono" style="font-size:11px;color:var(--fg)">' + esc(offersOf(e).map(function (o) { return o[0] === 'Guestlist' ? 'Guestlist' : 'F&F ' + (e.ff_price || 'special price'); }).join(' · ')) + '</span>' : '') + '</div></a>';
   }
   function viewFeed() {
     if (!me) return viewWelcome();
@@ -496,7 +504,12 @@
         (e.visibility === 'private' ? ' · private' : '') + '</span></span></a>';
       if (e.starts_at) h += '<div class="mono" style="font-size:13px">' + whenLine(e) + '</div>';
       h += '<p class="txt">' + esc(e.caption) + '</p>';
-      if (e.ticket_url) h += '<a class="pill big" href="' + esc(e.ticket_url) + '" target="_blank" rel="noopener noreferrer" style="align-self:flex-start">Tickets &amp; info' + (e.ticket_source ? ' on ' + esc(e.ticket_source) : '') + ' ↗</a>';
+      // What the host gives its community for this night
+      var offers = offersOf(e);
+      if (offers.length) h += '<section class="box"><span class="label">For the community</span>' + offers.map(function (o) {
+        return '<div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline"><span class="name" style="font-size:14px">' + esc(o[0]) + '</span><span class="small" style="text-align:right">' + esc(o[1]) + '</span></div>';
+      }).join('') + '</section>';
+      if (e.ticket_url) h += '<a class="pill" href="' + esc(e.ticket_url) + '" target="_blank" rel="noopener noreferrer" style="align-self:flex-start">Regular tickets &amp; info' + (e.ticket_source ? ' on ' + esc(e.ticket_source) : '') + ' ↗</a>';
       if (e.friends.length) h += '<div style="display:flex;align-items:center;gap:10px"><div class="faces">' + e.friends.map(function (f) { return '<span class="ring">' + av(f, 26) + '</span>'; }).join('') +
         '</div><span class="small" style="margin-left:8px">' + e.friends.map(function (f) { return esc(f.name); }).join(', ') + ' ' + (e.friends.length > 1 ? 'are' : 'is') + ' going</span></div>';
 
@@ -529,7 +542,7 @@
                 : '<button class="pill big solid" data-act="rsvp" data-list="going" data-id="' + esc(e.id) + '" data-going="0">I\'m going</button>';
         if (ml === 'gl') h += '<span class="small">On the guestlist</span>';
         if (ml === 'ff') h += '<span class="small">Friends &amp; family ticket</span>';
-        if (ml !== 'ff' && canFf) h += '<button class="pill" data-act="rsvp" data-list="ff" data-id="' + esc(e.id) + '" data-going="0">Get my friends &amp; family ticket</button>';
+        if (ml !== 'ff' && canFf) h += '<button class="pill" data-act="rsvp" data-list="ff" data-id="' + esc(e.id) + '" data-going="0">Get my friends &amp; family ticket' + (e.ff_price ? ' · ' + esc(e.ff_price) : '') + '</button>';
         if (!ml || ml === 'going') { if (canGl) h += '<button class="pill" data-act="rsvp" data-list="gl" data-id="' + esc(e.id) + '" data-going="0">Join the guestlist</button>'; }
         if (e.my_request && e.my_request.status === 'pending') h += '<span class="small">Request sent for ' + (e.my_request.list === 'ff' ? 'a friends & family ticket' : 'the guestlist') + '. The host will confirm.</span>';
         else {
@@ -671,7 +684,8 @@
       check('gl_on', glOn, 'Guestlist', 'Free entry. You get a link to send; on a public event members can also join from the page.') +
       check('allow_requests', !!v.allow_requests, 'Accept guestlist requests', 'People can ask; you accept or decline.') + '</fieldset>' +
       '<fieldset class="box"><legend class="field" style="padding:0 6px">Friends &amp; family tickets</legend>' +
-      check('ff_on', !!v.ff_on, 'Friends & family tickets', 'Special tickets you send with their own link.') +
+      check('ff_on', !!v.ff_on, 'Friends & family tickets', 'Special-price tickets for your community, sent with their own link.') +
+      '<div class="field"><label for="ff_price">Special price (optional)</label><input id="ff_price" name="ff_price" maxlength="40" placeholder="€10 instead of €25" value="' + esc(v.ff_price || '') + '"></div>' +
       check('ff_requests', !!v.ff_requests, 'Accept friends & family requests', 'People can ask for one; you accept or decline.') + '</fieldset>';
   }
   var LISTS = { gl: 'Guestlist', ff: 'Friends & family', going: 'Going' };

@@ -1,6 +1,6 @@
 # rsvp.fm
 
-Built for labels, promoters, clubs and artists. Guests only follow, see what's next, say they're going, and repost what pages share (with a comment) on their own page.
+Clubs, labels and artists keep guestlist spots and special-price tickets for the people close to them. rsvp.fm is where they stay in touch with that community and give them those invitations. It doesn't replace ticketing (regular tickets stay on Resident Advisor, Shotgun, DICE…): it's the side door for your people. Guests only follow, see the offers meant for them, say they're going, and repost what pages share (with a comment).
 
 See you there. A place made for meeting in real life: follow the artists, labels and promoters you love, know where they play next, and be there. No ads, no algorithm, no follower counts, free.
 
@@ -26,6 +26,7 @@ Runs entirely on Cloudflare: one Worker (API + static app) and one D1 database.
 - Events (labels, promoters, artists): an image, a caption, an optional start and end (date and time). Public (announced to followers and listed on the page) or private (only reachable with the guestlist link). Each event has two lists, each switched on or off by the host: the guestlist and friends & family tickets. Each list has its own link (`rsvp.fm/e/id?k=…`): members who open it are on that list in one tap. Separately, any member can tap "I'm going" on an event they can see. Requests can be allowed per list: members ask in one tap, people without an account leave a name, email and note; the host accepts or declines. No counters anywhere: no follower counts, no "going" counts.
 - Import an event from a link (New event → Import from a link): paste a Resident Advisor, Shotgun, DICE, Eventbrite, Ticket Fairy… event URL. The Worker reads the page (Resident Advisor's GraphQL API, then schema.org JSON-LD, Next.js page data, Open Graph tags; code in `src/importer.js`) and prefills the form: image (kept hosted on the original site), caption with title, venue, line-up and description, start and end. The event gets a "Tickets & info on …" button pointing back to the original page. Any event can also carry that link by hand.
 - Invite from the event (host view, under each list link): "Invite…" opens the phone's share sheet (WhatsApp, Messages, Mail, Instagram… pick contacts there), plus direct WhatsApp, SMS and email buttons with a ready message ("Deeplabel invites you to the guestlist of Secret garden on Sat 12 Dec. Confirm your name here: …"). Nothing is sent from the server and no contacts are read.
+- Community offers: each event shows what the host keeps for its community (guestlist, friends & family tickets with an optional special price such as "€10 instead of €25"), on the event page, in Invitations and in the invite messages. A "Regular tickets & info on …" button points to the usual ticketing.
 - Share links carry `?ref=handle`; the guestlist records who brought whom.
 - Host view on each event: the list links, requests to accept or decline, and the lists with who brought whom.
 - Door mode (`/e/id/door`): everyone on every list in one searchable list; tap to check someone in, tap again to undo.
