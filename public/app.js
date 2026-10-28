@@ -76,6 +76,24 @@
   function rsvpLabel(e) { return e.is_going ? 'Going ✓' : 'I\'m going'; }
   function rsvpLabelOld(e) { return e.is_going ? (e.entry === 'ticket' ? 'Going' : 'On the list') : (e.entry === 'ticket' ? 'Get ticket' : 'RSVP'); }
   function shareLink(id) { return location.origin + '/e/' + id + (me ? '?ref=' + me.handle : ''); }
+  // Invite people: the phone's share sheet (WhatsApp, Messages, Mail, Instagram…), or straight to WhatsApp, SMS or email.
+  function inviteText(e, list) {
+    var title = (e.caption || e.title || '').split('\n')[0];
+    var when = e.starts_at ? ' on ' + fmtDate(e.starts_at) : '';
+    if (list === 'ff') return e.host.name + ' invites you to ' + title + when + ': a friends & family ticket is waiting for you. Confirm your name here:';
+    if (list === 'gl') return e.host.name + ' invites you to the guestlist of ' + title + when + '. Confirm your name here:';
+    return title + when + ', see you there?';
+  }
+  function inviteButtons(e, list, url) {
+    var text = inviteText(e, list), full = text + ' ' + url, enc = encodeURIComponent;
+    var subject = list === 'ff' ? 'Your friends & family ticket' : list === 'gl' ? 'You\'re invited: ' + (e.caption || e.title || '').split('\n')[0] : (e.caption || e.title || '').split('\n')[0];
+    return '<div class="acts" style="flex-wrap:wrap">' +
+      '<button class="pill solid" data-act="invite" data-id="' + esc(url) + '" data-text="' + esc(text) + '">Invite…</button>' +
+      '<a class="pill" href="https://wa.me/?text=' + enc(full) + '" target="_blank" rel="noopener">WhatsApp</a>' +
+      '<a class="pill" href="sms:?&body=' + enc(full) + '">SMS</a>' +
+      '<a class="pill" href="mailto:?subject=' + enc(subject) + '&body=' + enc(full) + '">Email</a>' +
+      '<button class="pill ghost" data-act="copylink" data-id="' + esc(url) + '">Copy link</button></div>';
+  }
   function copy(text) {
     var done = function () { say('Link copied · ' + text.replace(/^https?:\/\//, '')); };
     if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, function () { prompt('Copy this link', text); });
@@ -528,14 +546,14 @@
 
       if (e.is_host) {
         var base = location.origin + '/e/' + e.id + '?k=';
-        function linkBox(title, url, note) {
+        function linkBox(title, url, note, list) {
           return '<section class="box"><span class="label">' + title + '</span>' +
             '<span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(url.replace(/^https?:\/\//, '')) + '</span>' +
             '<span class="small">' + note + '</span>' +
-            '<div><button class="pill solid" data-act="copylink" data-id="' + esc(url) + '">Copy link</button></div></section>';
+            inviteButtons(e, list, url) + '</section>';
         }
-        if (e.gl_on) h += linkBox('Guestlist link', base + e.gl_token, (e.visibility === 'private' ? 'Private event: only people with a link can see it.' : 'Public event: members can also join from the page.') + (e.allow_requests ? ' Requests are on.' : ''));
-        if (e.ff_on) h += linkBox('Friends & family link', base + e.ff_token, 'Whoever opens it gets a friends & family ticket.' + (e.ff_requests ? ' Requests are on.' : ''));
+        if (e.gl_on) h += linkBox('Guestlist link', base + e.gl_token, (e.visibility === 'private' ? 'Private event: only people with a link can see it.' : 'Public event: members can also join from the page.') + (e.allow_requests ? ' Requests are on.' : ''), 'gl');
+        if (e.ff_on) h += linkBox('Friends & family link', base + e.ff_token, 'Whoever opens it gets a friends & family ticket.' + (e.ff_requests ? ' Requests are on.' : ''), 'ff');
         if (!e.gl_on && !e.ff_on) h += '<p class="small" style="margin:0">Guestlist and friends &amp; family are both off. Turn one on in Edit.</p>';
         h += '<div class="acts" style="flex-wrap:wrap"><a class="pill solid" href="/e/' + esc(e.id) + '/door">Door</a><button class="pill" data-act="exportcsv" data-id="' + esc(e.id) + '">Export CSV</button>' +
           '<a class="pill" href="/e/' + esc(e.id) + '/edit">Edit</a><button class="pill ghost" data-act="delevent" data-id="' + esc(e.id) + '">Delete</button></div><div id="guests"></div>';
@@ -954,7 +972,15 @@
     var b = ev.target.closest('button[data-act]'); if (!b) return;
     var act = b.getAttribute('data-act'), id = b.getAttribute('data-id');
     if (act === 'back') { if (history.length > 1) history.back(); else go('/'); return; }
-    if (act === 'share') return copy(shareLink(id));
+    if (act === 'share') {
+      if (navigator.share) return navigator.share({ url: shareLink(id) }).catch(function () {});
+      return copy(shareLink(id));
+    }
+    if (act === 'invite') {
+      var it = b.getAttribute('data-text');
+      if (navigator.share) return navigator.share({ text: it, url: id }).catch(function () {});
+      return copy(it + ' ' + id);
+    }
     if (act === 'copyinvite') return copy(inviteUrl(id));
     if (act === 'copyclaim') return copy(location.origin + '/claim/' + id);
     if (act === 'copylink') return copy(id);
