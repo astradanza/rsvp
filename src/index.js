@@ -1,6 +1,7 @@
 // rsvp.fm — Cloudflare Worker: JSON API under /api, static app for everything else.
 import { SCHEMA } from './schema.js';
 import { importEvent, captionFrom, sourceName } from './importer.js';
+import { isGuestlistHost, handleGuestlist } from './gl.js';
 
 // Create the tables on first use (idempotent), so a plain `wrangler deploy` is enough.
 // Columns added after launch: added here if missing (mirrors migrations/0002_invite_links.sql).
@@ -95,7 +96,7 @@ const LOW_INVITES = 2;         // admins are alerted when a member has this many
 const RESERVED = new Set([
   'api', 'e', 'new', 'login', 'signup', 'logout', 'discover', 'settings', 'feed', 'about', 'admin',
   'assets', 'static', 'invite', 'invites', 'me', 'help', 'terms', 'privacy', 'rsvp', 'www', 'app',
-  'event', 'events', 'post', 'posts', 'search', 'home', 'index', 'favicon', 'robots', 'root', 'support', 'claim', 'avatars', 'img', 'favorites', 'favourites', 'notifications', 'switch'
+  'event', 'events', 'post', 'posts', 'search', 'home', 'index', 'favicon', 'robots', 'root', 'support', 'claim', 'avatars', 'img', 'favorites', 'favourites', 'notifications', 'switch', 'gl'
 ]);
 const HANDLE_RE = /^[a-z0-9_]{2,24}$/;
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
@@ -111,6 +112,8 @@ async function dropImage(env, me, url) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    // list.rsvp.fm: the guestlist product, separate app and tables
+    if (isGuestlistHost(url.hostname)) return handleGuestlist(request, env, url);
     if (url.pathname.startsWith('/api/')) {
       try {
         await ensureSchema(env);

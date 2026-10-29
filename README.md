@@ -62,3 +62,13 @@ npm run dev   # http://localhost:8787
 - `src/index.js` — the Worker: JSON API under `/api/*`, static files for everything else.
 - `public/` — the app (plain HTML/CSS/JS, no build step).
 - `migrations/` — D1 schema. Add a new numbered file for each schema change.
+
+## Guestlist (list.rsvp.fm)
+
+A second, separate product on its own subdomain, built from scratch around the guestlist only. Same Worker and database, its own tables (`gl_*`), sessions and app (`src/gl.js`, `public/gl/`). Cream paper, serif type, no images.
+
+- Organizers (promoter, label or artist; no difference for now) create an account, then an event: name, start and end, venue, city, details, whether guests may bring a +1, +2 or +3, automatic confirmation on or off, list open or closed.
+- Guest page `list.rsvp.fm/<id>`: the invitation (host, event, details) and a "Request a spot on the guestlist" form: full name, email, how many they bring, RSVP. They come back to the same page to see their status (requested, confirmed). Same email again updates the RSVP.
+- Back office `list.rsvp.fm/e/<id>`: the link to share, requests / people / confirmed, sort by arrival or A–Z, confirm one by one or everyone, decline, copy the list as text, export CSV, close or reopen the list, edit, delete.
+
+Setup: Cloudflare → Workers & Pages → the rsvp-fm Worker → Settings → Domains & Routes → Add → Custom domain → `list.rsvp.fm`. Any hostname starting with `list.`, `guestlist.` or `gl.` serves this app.
