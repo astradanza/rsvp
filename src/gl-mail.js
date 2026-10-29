@@ -9,6 +9,8 @@ const APP = 'https://rsvp.fm';
 
 export const mailEnabled = (env) => !!(env && env.EMAIL && typeof env.EMAIL.send === 'function');
 const appUrl = (env) => (env && env.GL_URL) || APP;
+// rsvp.fm/<handle>/<slug>, or the short id
+const evPath = (handle, e) => (e.slug && handle ? `/${handle}/${e.slug}` : `/${e.id}`);
 
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -86,7 +88,7 @@ const prefsLink = (env, p) => `${appUrl(env)}/prefs?e=${encodeURIComponent(p.ema
 
 // ---------- transactional ----------
 export async function mailRsvp(env, { event, org, guest }) {
-  const link = `${appUrl(env)}/${event.id}?t=${encodeURIComponent(guest.token)}`;
+  const link = `${appUrl(env)}${evPath(org.handle, event)}?t=${encodeURIComponent(guest.token)}`;
   const ok = guest.status === 'confirmed';
   const plus = guest.plus ? ` +${guest.plus}` : '';
   return send(env, {
@@ -120,7 +122,7 @@ export async function sendDigests(env, { limit = 2000, now = new Date() } = {}) 
   const dayAgo = new Date(now.getTime() - 40 * 3600 * 1000).toISOString().slice(0, 19).replace('T', ' ');
   const rows = (await env.DB.prepare(
     `SELECT c.email, MAX(c.name) AS name, MAX(c.consent) AS consent, COALESCE(MAX(p.digest), 'daily') AS digest,
-       EXISTS(SELECT 1 FROM gl_push s WHERE s.email = c.email) AS has_push, e.id, e.title, e.starts_at, e.venue, e.city, o.name AS org_name, o.handle AS org_handle, o.id AS org_id,
+       EXISTS(SELECT 1 FROM gl_push s WHERE s.email = c.email) AS has_push, e.id, e.slug, e.title, e.starts_at, e.venue, e.city, o.name AS org_name, o.handle AS org_handle, o.id AS org_id,
        (SELECT MAX(l.created_at) FROM gl_mail_log l WHERE l.email = c.email AND l.event_id = e.id AND l.kind = 'invite' AND l.status = 'sent') AS invited_at,
        EXISTS(SELECT 1 FROM gl_mail_log l WHERE l.email = c.email AND l.event_id = e.id AND l.kind = 'reminder' AND l.status = 'sent') AS reminded
      FROM gl_contacts c
@@ -151,7 +153,7 @@ export async function sendDigests(env, { limit = 2000, now = new Date() } = {}) 
     if (sent >= limit) break;
     const p = await prefsFor(env, email);
     const orgs = [...new Set([...d.fresh, ...d.waiting].map((r) => r.org_name))];
-    const item = (r) => `<a href="${esc(appUrl(env) + '/' + r.id)}" style="color:#1C1B19"><strong>${esc(r.title)}</strong></a><br><span style="color:#6E685E">${esc(r.org_name)} · ${esc(when(r))}${where(r) ? ' · ' + esc(where(r)) : ''}</span>`;
+    const item = (r) => `<a href="${esc(appUrl(env) + evPath(r.org_handle, r))}" style="color:#1C1B19"><strong>${esc(r.title)}</strong></a><br><span style="color:#6E685E">${esc(r.org_name)} · ${esc(when(r))}${where(r) ? ' · ' + esc(where(r)) : ''}</span>`;
     const n = d.fresh.length + d.waiting.length;
     const lines = [];
     if (d.fresh.length) lines.push(...d.fresh.map(item));
@@ -162,7 +164,7 @@ export async function sendDigests(env, { limit = 2000, now = new Date() } = {}) 
       const pushed = await pushTo(env, email, {
         title: d.fresh.length ? (single ? `${single.org_name} invites you` : `${n} invitations waiting`) : 'Still waiting for your RSVP',
         body: single ? `${single.title}${when(single) ? ' · ' + when(single) : ''}` : orgs.slice(0, 3).join(', '),
-        url: single ? `/${single.id}` : '/me', tag: 'invitations'
+        url: single ? evPath(single.org_handle, single) : '/me', tag: 'invitations'
       });
       if (pushed) delivered = true;
     }
@@ -176,7 +178,7 @@ export async function sendDigests(env, { limit = 2000, now = new Date() } = {}) 
         kicker: 'Invitations',
         title: n === 1 ? `${esc(orgs[0])} invites you.` : `You have ${n} invitations waiting.`,
         lines,
-        button: single ? { label: 'RSVP', href: `${appUrl(env)}/${single.id}` } : { label: 'See my invitations', href: `${appUrl(env)}/me` },
+        button: single ? { label: 'RSVP', href: `${appUrl(env)}${evPath(single.org_handle, single)}` } : { label: 'See my invitations', href: `${appUrl(env)}/me` },
         after: [`From ${esc(orgs.join(', '))}. You receive this because you joined their page on rsvp.fm.`],
         footer: `<a href="${esc(prefsLink(env, p))}" style="color:#9C9588">Email settings or unsubscribe</a>`
       }

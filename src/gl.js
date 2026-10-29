@@ -24,7 +24,7 @@ function customOf(o) {
   return null;
 }
 function themeOf(theme, custom) { return theme === 'custom' && custom ? 'custom' : THEMES.includes(theme) ? theme : DEFAULT_THEME; }
-const RESERVED = new Set(['api', 'e', 'new', 'login', 'signup', 'logout', 'account', 'community', 'me', 'img', 'app', 'style', 'favicon', 'prefs',
+const RESERVED = new Set(['api', 'e', 'i', 'new', 'login', 'signup', 'logout', 'account', 'community', 'me', 'img', 'app', 'style', 'favicon', 'prefs',
   'admin', 'settings', 'help', 'about', 'terms', 'privacy', 'www', 'list', 'rsvp', 'events', 'event', 'invite', 'join', 'guest', 'guests']);
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,29}$/;
 
@@ -139,7 +139,7 @@ async function ensureSchema(env) {
     ['custom_theme', "TEXT NOT NULL DEFAULT ''"], ['v1_user_id', 'INTEGER']
   ]);
   await addColumns(env, 'gl_guests', [['consent', 'INTEGER NOT NULL DEFAULT 0'], ['names', "TEXT NOT NULL DEFAULT ''"], ['invite_code', 'TEXT']]);
-  await addColumns(env, 'gl_events', [['listed', 'INTEGER NOT NULL DEFAULT 1']]);
+  await addColumns(env, 'gl_events', [['listed', 'INTEGER NOT NULL DEFAULT 1'], ['slug', 'TEXT']]);
   await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS gl_orgs_handle ON gl_orgs(handle)').run();
   // guests who RSVP'd before communities existed join their organizer's community (no email consent)
   if (!(await env.DB.prepare('SELECT 1 FROM gl_contacts LIMIT 1').first())) {
@@ -154,7 +154,26 @@ async function ensureSchema(env) {
   }
   // accounts, events and lists of the first rsvp.fm, once
   await migrateV1(env, { freeHandle, code, token, reserved: RESERVED, handleRe: HANDLE_RE });
+  // every event gets a readable address: rsvp.fm/<handle>/<slug>
+  const noSlug = (await env.DB.prepare('SELECT id, org_id, title FROM gl_events WHERE slug IS NULL').all()).results;
+  for (const e of noSlug) await env.DB.prepare('UPDATE gl_events SET slug = ? WHERE id = ?').bind(await freeSlug(env, e.org_id, e.title, e.id), e.id).run();
+  await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS gl_events_slug ON gl_events(org_id, slug)').run();
   ready = true;
+}
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,59}$/;
+async function freeSlug(env, orgId, title, selfId) {
+  let base = slugify(title).slice(0, 50) || 'event';
+  let s = base;
+  for (let i = 2; await env.DB.prepare('SELECT 1 FROM gl_events WHERE org_id = ? AND slug = ? AND id != ?').bind(orgId, s, selfId || '').first(); i++) s = base + '-' + i;
+  return s;
+}
+// the slug the organizer typed, or one made from the title
+async function eventSlug(env, orgId, b, title, selfId) {
+  const want = str(b.slug, 60).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+  if (!want) return freeSlug(env, orgId, title, selfId);
+  if (!SLUG_RE.test(want)) fail(400, 'The link uses lowercase letters, digits and dashes.');
+  if (await env.DB.prepare('SELECT 1 FROM gl_events WHERE org_id = ? AND slug = ? AND id != ?').bind(orgId, want, selfId || '').first()) fail(409, 'You already use this link for another event.');
+  return want;
 }
 async function freeHandle(env, name) {
   let base = slugify(name);
@@ -223,7 +242,7 @@ function eventFields(b) {
 }
 const eventShape = (e) => ({
   id: e.id, title: e.title, starts_at: e.starts_at, ends_at: e.ends_at, venue: e.venue, city: e.city, details: e.details,
-  plus_max: e.plus_max, auto_confirm: !!e.auto_confirm, open: !!e.open, listed: e.listed == null ? true : !!e.listed, created_at: e.created_at
+  slug: e.slug || '', plus_max: e.plus_max, auto_confirm: !!e.auto_confirm, open: !!e.open, listed: e.listed == null ? true : !!e.listed, created_at: e.created_at
 });
 const guestShape = (g) => ({ id: g.id, name: g.name, email: g.email, plus: g.plus, names: namesOf(g), invite_code: g.invite_code || '', status: g.status, consent: !!g.consent, created_at: g.created_at, updated_at: g.updated_at });
 // Extra names registered through a unique link (one per line)
@@ -234,7 +253,7 @@ const UPCOMING = `(e.starts_at = '' OR e.starts_at >= strftime('%Y-%m-%dT%H:%M',
 async function notifyConfirmed(env, event, org, guest) {
   await mailConfirmed(env, { event, org, guest });
   const m = /^\d{4}-(\d{2})-(\d{2})T(\d{2}:\d{2})/.exec(event.starts_at || '');
-  await pushTo(env, guest.email, { title: "You're on the list", body: event.title + (m ? ` · ${+m[2]}/${+m[1]} ${m[3]}` : ''), url: '/' + event.id + '?t=' + encodeURIComponent(guest.token), tag: 'confirm-' + event.id });
+  await pushTo(env, guest.email, { title: "You're on the list", body: event.title + (m ? ` · ${+m[2]}/${+m[1]} ${m[3]}` : ''), url: (event.slug && org.handle ? '/' + org.handle + '/' + event.slug : '/' + event.id) + '?t=' + encodeURIComponent(guest.token), tag: 'confirm-' + event.id });
 }
 
 async function ownEvent(env, org, id) {
@@ -450,14 +469,16 @@ async function api(request, env, url, ctx) {
   }
   if (path === '/api/events' && method === 'POST') {
     need();
-    const f = eventFields(await body(request));
+    const b = await body(request);
+    const f = eventFields(b);
     let id = code(8);
     while (await env.DB.prepare('SELECT 1 FROM gl_orgs WHERE handle = ?').bind(id).first()) id = code(8);
+    const slug = await eventSlug(env, org.id, b, f.title, id);
     await env.DB.prepare(
-      `INSERT INTO gl_events (id, org_id, title, starts_at, ends_at, venue, city, details, plus_max, auto_confirm, open, listed)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(id, org.id, f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed).run();
-    return json({ id }, 201);
+      `INSERT INTO gl_events (id, org_id, title, starts_at, ends_at, venue, city, details, plus_max, auto_confirm, open, listed, slug)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, org.id, f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed, slug).run();
+    return json({ id, slug }, 201);
   }
   if (seg[0] === 'events' && seg[1]) {
     need();
@@ -470,10 +491,12 @@ async function api(request, env, url, ctx) {
         invites: invites.map((i) => ({ code: i.code, slots: i.slots, label: i.label, used: !!i.guest_id, guest_name: i.guest_name || '', names: namesOf({ names: i.guest_names }), created_at: i.created_at })) });
     }
     if (seg.length === 2 && method === 'PATCH') {
-      const f = eventFields(await body(request));
+      const b = await body(request);
+      const f = eventFields(b);
+      const slug = b.slug === undefined ? e.slug : await eventSlug(env, org.id, b, f.title, e.id);
       await env.DB.prepare(
-        `UPDATE gl_events SET title = ?, starts_at = ?, ends_at = ?, venue = ?, city = ?, details = ?, plus_max = ?, auto_confirm = ?, open = ?, listed = ? WHERE id = ?`
-      ).bind(f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed, e.id).run();
+        `UPDATE gl_events SET title = ?, starts_at = ?, ends_at = ?, venue = ?, city = ?, details = ?, plus_max = ?, auto_confirm = ?, open = ?, listed = ?, slug = ? WHERE id = ?`
+      ).bind(f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed, slug, e.id).run();
       return json({ id: e.id });
     }
     if (seg.length === 2 && method === 'DELETE') {
@@ -710,6 +733,12 @@ async function api(request, env, url, ctx) {
     }
   }
   // An address: an event id or an organizer's handle
+  // rsvp.fm/<handle>/<slug>: the event's readable address
+  if (seg[0] === 'resolve' && seg[1] && seg[2] && method === 'GET') {
+    const r = await env.DB.prepare('SELECT e.id FROM gl_events e JOIN gl_orgs o ON o.id = e.org_id WHERE o.handle = ? AND e.slug = ?').bind(String(seg[1]).toLowerCase(), String(seg[2]).toLowerCase()).first();
+    if (!r) fail(404, 'This event does not exist.');
+    return json({ type: 'event', id: r.id });
+  }
   if (seg[0] === 'resolve' && seg[1] && method === 'GET') {
     const s = String(seg[1]).toLowerCase();
     if (await env.DB.prepare('SELECT 1 FROM gl_events WHERE id = ?').bind(s).first()) return json({ type: 'event' });

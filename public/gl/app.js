@@ -122,7 +122,9 @@
     if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, function () { window.prompt('Copy', text); });
     else window.prompt('Copy', text);
   }
-  function pageUrl(id) { return location.origin + '/' + id; }
+  // An event's address: rsvp.fm/<handle>/<slug> (the short id still works)
+  function eventPath(e, handle) { return e.slug && handle ? '/' + handle + '/' + e.slug : '/' + e.id; }
+  function pageUrl(e, handle) { return location.origin + eventPath(e, handle); }
   function logoImg(src, cls) { return src ? '<div class="logo' + (cls ? ' ' + cls : '') + '"><img src="' + esc(src) + '" alt=""></div>' : ''; }
   function csvDownload(rows, filename) {
     var q = function (v) { v = String(v == null ? '' : v); return /[",\n;]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
@@ -331,6 +333,7 @@
     var pm = v.plus_max || 0;
     return '<form id="f-event"' + (id ? ' data-id="' + esc(id) + '"' : '') + '>' +
       '<label><span>Event</span><input name="title" maxlength="120" required value="' + esc(v.title || '') + '" placeholder="Name of the night"></label>' +
+      '<label><span>Link</span><span class="prefix"><em>' + esc(location.host + '/' + org.handle + '/') + '</em><input name="slug" maxlength="60" autocapitalize="none" autocomplete="off" value="' + esc(v.slug || '') + '" placeholder="made from the name"></span></label>' +
       '<div class="two"><label><span>Starts</span><input name="starts_at" type="datetime-local" value="' + esc(v.starts_at || '') + '"></label>' +
       '<label><span>Ends (optional)</span><input name="ends_at" type="datetime-local" value="' + esc(v.ends_at || '') + '"></label></div>' +
       '<div class="two"><label><span>Venue</span><input name="venue" maxlength="120" value="' + esc(v.venue || '') + '"></label>' +
@@ -383,7 +386,7 @@
     return gs;
   }
   function renderManage() {
-    var e = current.event, c = counts(current.guests), url = pageUrl(e.id);
+    var e = current.event, c = counts(current.guests), url = pageUrl(e, org.handle);
     var h = '<div class="stack lg">' +
       '<div class="stack"><p class="sc">' + (e.open ? 'Guestlist open' : 'Guestlist closed') + '</p><h1>' + esc(e.title) + '</h1>' +
       (e.starts_at ? '<p class="when">' + esc(whenLine(e)) + '</p>' : '') +
@@ -391,7 +394,7 @@
       '<div class="box"><span class="sc">Link for your guests</span><span class="linkline">' + esc(url.replace(/^https?:\/\//, '')) + '</span>' +
       '<div class="acts"><button class="btn small" data-act="copylink" data-id="' + esc(url) + '">Copy link</button>' +
       (navigator.share ? '<button class="btn small line" data-act="sharelink" data-id="' + esc(url) + '">Share…</button>' : '') +
-      '<a class="btn small line" href="/' + esc(e.id) + '" target="_blank" rel="noopener">View page</a></div></div>' +
+      '<a class="btn small line" href="' + esc(eventPath(e, org.handle)) + '" target="_blank" rel="noopener">View page</a></div></div>' +
       invitesBox() +
       '<div class="stats"><div class="stat"><b>' + c.requests + '</b><span>Requests</span></div><div class="stat"><b>' + c.people + '</b><span>People</span></div>' +
       '<div class="stat"><b>' + c.confirmed + '</b><span>Confirmed</span></div></div>' +
@@ -415,7 +418,7 @@
     main.innerHTML = h;
   }
   // Unique links: "you've been invited to register N names on the guestlist"
-  function inviteUrl(code) { return pageUrl(current.event.id) + '?inv=' + code; }
+  function inviteUrl(code) { return pageUrl(current.event, org.handle) + '?inv=' + code; }
   function invitesBox() {
     var h = '<div class="box"><span class="sc">Unique invitation links</span>' +
       '<p class="quiet small">One link for one guest, who registers up to the number of names you choose. Confirmed right away.</p>' +
@@ -470,7 +473,7 @@
       if (j.access) {
         h += '<div class="stack"><h3>Upcoming</h3>';
         if (j.events.length) h += '<div class="list">' + j.events.map(function (e) {
-          return '<a class="item" href="/' + esc(e.id) + '"><span class="date">' + esc(shortDate(e.starts_at)) + '</span><span class="main"><span class="t">' + esc(e.title) + '</span>' +
+          return '<a class="item" href="' + esc(eventPath(e, o.handle)) + '"><span class="date">' + esc(shortDate(e.starts_at)) + '</span><span class="main"><span class="t">' + esc(e.title) + '</span>' +
             '<span class="m">' + esc([e.venue, e.city].filter(Boolean).join(', ')) + (e.open ? '' : (e.venue || e.city ? ' · ' : '') + 'list closed') + '</span></span></a>';
         }).join('') + '</div>';
         else h += '<p class="quiet">No upcoming events yet.</p>';
@@ -640,7 +643,7 @@
       var h = '<div class="stack lg"><div class="stack"><p class="sc">' + esc(j.person.name) + '</p><h1>My invitations</h1></div>';
       if (j.events.length) h += '<div class="list">' + j.events.map(function (e) {
         var st = e.my_status === 'confirmed' ? 'On the list' + plusLabel(e.my_plus) : e.my_status === 'requested' ? 'Requested' + plusLabel(e.my_plus) : e.my_status === 'declined' ? 'Not this time' : 'Invitation';
-        return '<a class="item" href="/' + esc(e.id) + '"><span class="date">' + esc(shortDate(e.starts_at)) + '</span><span class="main"><span class="t">' + esc(e.title) + '</span>' +
+        return '<a class="item" href="' + esc(eventPath(e, e.host.handle)) + '"><span class="date">' + esc(shortDate(e.starts_at)) + '</span><span class="main"><span class="t">' + esc(e.title) + '</span>' +
           '<span class="m">' + esc(e.host.name) + ' · ' + esc(st) + '</span></span></a>';
       }).join('') + '</div>';
       else h += '<p class="quiet">No invitations right now. They will appear here as soon as the pages you follow open a guestlist.</p>';
@@ -793,7 +796,7 @@
       }
       api('POST', '/p/' + gid + '/rsvp', d).then(function (r) {
         try { localStorage.setItem('gl:' + gid, r.token); } catch (e) {}
-        history.replaceState({}, '', '/' + gid + '?t=' + encodeURIComponent(r.token));
+        history.replaceState({}, '', location.pathname + '?t=' + encodeURIComponent(r.token));
         viewGuest(gid);
       }).catch(fail);
     } else if (f.id === 'f-person') {
@@ -832,6 +835,11 @@
       return api('GET', '/invite/' + m[1].toLowerCase()).then(function (r) { go(r.handle ? '/' + r.handle : '/', true); }).catch(function () { go('/', true); });
     }
     if ((m = /^\/e\/([a-z0-9]{4,16})\/edit$/.exec(p))) return viewEdit(m[1]);
+    if ((m = /^\/([a-z0-9][a-z0-9_-]{1,29})\/([a-z0-9][a-z0-9-]{0,59})$/i.exec(p)) && m[1] !== 'e' && m[1] !== 'i') {
+      loading();
+      return api('GET', '/resolve/' + m[1].toLowerCase() + '/' + m[2].toLowerCase()).then(function (r) { viewGuest(r.id); })
+        .catch(function (e) { header('guest'); showError(e); });
+    }
     if ((m = /^\/([a-z0-9][a-z0-9_-]{1,29})$/i.exec(p))) {
       var slug = m[1].toLowerCase();
       loading();

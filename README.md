@@ -71,6 +71,7 @@ Built from scratch around the guestlist only. Same Worker and database, its own 
 
 - Organizers (promoter, label or artist; no difference for now) create an account, then an event: name, start and end, venue, city, details, whether guests may bring a +1, +2 or +3, automatic confirmation on or off, list open or closed.
 - Guest page `list.rsvp.fm/<id>`: the invitation (host, event, details) and a "Request a spot on the guestlist" form: full name, email, how many they bring, RSVP. They come back to the same page to see their status (requested, confirmed). Same email again updates the RSVP.
+- Event addresses: `rsvp.fm/<handle>/<slug>` (e.g. rsvp.fm/astradanza/halloween), the slug made from the name or chosen in the event form ("Link"), unique per organizer. The short `rsvp.fm/<id>` keeps working; emails and notifications use the readable address.
 - Unique invitation links (back office of an event): choose with − / + how many names (1 by default) and optionally for whom, then copy or share the link. The guest sees "You've been invited to register N names on the guestlist", enters their name, email and the other names, and is confirmed right away (even if the public list is closed). One use per link; the guest can change the names later from the same browser; unused links can be deleted.
 - Back office `list.rsvp.fm/e/<id>`: the link to share, requests / people / confirmed, sort by arrival or A–Z, confirm one by one or everyone, decline, copy the list as text, export CSV, close or reopen the list, edit, delete.
 
