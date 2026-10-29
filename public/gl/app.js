@@ -9,28 +9,70 @@
   var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   // Six themes for organizer pages: colors and type. Fonts load when a theme is shown.
   var THEMES = {
-    terminal: { name: 'Terminal', paper: '#0A0A0A', ink: '#E6E6E6', display: "'JetBrains Mono'", text: "'JetBrains Mono'", type: 'JetBrains Mono', fonts: 'JetBrains+Mono:ital,wght@0,400;0,500;1,400' },
-    phosphor: { name: 'Phosphor', paper: '#030803', ink: '#8CFF9E', display: "'IBM Plex Mono'", text: "'IBM Plex Mono'", type: 'IBM Plex Mono', fonts: 'IBM+Plex+Mono:ital,wght@0,400;0,500;1,400' },
-    amber: { name: 'Amber', paper: '#0D0A04', ink: '#FFB347', display: "'Space Mono'", text: "'Space Mono'", type: 'Space Mono', fonts: 'Space+Mono:ital,wght@0,400;0,700;1,400' },
-    graphite: { name: 'Graphite', paper: '#16181D', ink: '#D7DAE0', display: "'Fira Code'", text: "'Fira Code'", type: 'Fira Code', fonts: 'Fira+Code:wght@400;500' },
-    solarized: { name: 'Solarized', paper: '#002B36', ink: '#EEE8D5', display: "'Source Code Pro'", text: "'Source Code Pro'", type: 'Source Code Pro', fonts: 'Source+Code+Pro:ital,wght@0,400;0,500;1,400' },
-    nocturne: { name: 'Nocturne', paper: '#0B0B12', ink: '#E4DFF5', display: "'Instrument Serif'", text: "'IBM Plex Mono'", type: 'Instrument · Plex Mono', fonts: 'Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400' }
+    terminal: { name: 'Terminal', paper: '#0A0A0A', ink: '#E6E6E6', accent: '#3DDC84', d: 'JetBrains Mono', t: 'JetBrains Mono' },
+    phosphor: { name: 'Phosphor', paper: '#030803', ink: '#8CFF9E', accent: '#D4FF5C', d: 'IBM Plex Mono', t: 'IBM Plex Mono' },
+    amber: { name: 'Amber', paper: '#0D0A04', ink: '#FFB347', accent: '#FFD9A0', d: 'Space Mono', t: 'Space Mono' },
+    graphite: { name: 'Graphite', paper: '#16181D', ink: '#D7DAE0', accent: '#61AFEF', d: 'Fira Code', t: 'Fira Code' },
+    solarized: { name: 'Solarized', paper: '#002B36', ink: '#EEE8D5', accent: '#B58900', d: 'Source Code Pro', t: 'Source Code Pro' },
+    nocturne: { name: 'Nocturne', paper: '#0B0B12', ink: '#E4DFF5', accent: '#A68BFF', d: 'Instrument Serif', t: 'IBM Plex Mono' }
   };
   var DEFAULT_THEME = 'terminal';
-
-
+  // Fonts for themes and custom themes (loaded from Google Fonts when shown)
+  var FONTS = {
+    'JetBrains Mono': { g: 'JetBrains+Mono:ital,wght@0,400;0,500;1,400', mono: 1 },
+    'IBM Plex Mono': { g: 'IBM+Plex+Mono:ital,wght@0,400;0,500;1,400', mono: 1 },
+    'Space Mono': { g: 'Space+Mono:ital,wght@0,400;0,700;1,400', mono: 1 },
+    'Fira Code': { g: 'Fira+Code:wght@400;500', mono: 1 },
+    'Source Code Pro': { g: 'Source+Code+Pro:ital,wght@0,400;0,500;1,400', mono: 1 },
+    'DM Mono': { g: 'DM+Mono:ital,wght@0,400;0,500;1,400', mono: 1 },
+    'Instrument Serif': { g: 'Instrument+Serif:ital@0;1', serif: 1 },
+    'Cormorant Garamond': { g: 'Cormorant+Garamond:ital,wght@0,400;0,500;1,400', serif: 1 },
+    'EB Garamond': { g: 'EB+Garamond:ital,wght@0,400;0,500;1,400', serif: 1 },
+    'Playfair Display': { g: 'Playfair+Display:ital,wght@0,400;0,500;1,400', serif: 1 },
+    'Fraunces': { g: 'Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;1,9..144,400', serif: 1 },
+    'Bodoni Moda': { g: 'Bodoni+Moda:ital,opsz,wght@0,6..96,400;0,6..96,500;1,6..96,400', serif: 1 },
+    'Libre Caslon Text': { g: 'Libre+Caslon+Text:ital,wght@0,400;1,400', serif: 1 },
+    'Inter': { g: 'Inter:wght@300;400;500' },
+    'Jost': { g: 'Jost:wght@300;400;500' },
+    'Space Grotesk': { g: 'Space+Grotesk:wght@300;400;500' },
+    'Syne': { g: 'Syne:wght@400;500;700' },
+    'Archivo': { g: 'Archivo:wght@300;400;500' }
+  };
+  function fontStack(name) { var f = FONTS[name] || {}; return "'" + name + "'," + (f.mono ? 'ui-monospace,Menlo,monospace' : f.serif ? 'Georgia,serif' : 'system-ui,sans-serif'); }
   var loadedFonts = {};
-  function loadFonts(t) {
-    var th = THEMES[t]; if (!th || !th.fonts || loadedFonts[t]) return;
-    loadedFonts[t] = 1;
-    var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'https://fonts.googleapis.com/css2?family=' + th.fonts + '&display=swap';
+  function loadFont(name) {
+    var f = FONTS[name]; if (!f || loadedFonts[name]) return;
+    loadedFonts[name] = 1;
+    var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'https://fonts.googleapis.com/css2?family=' + f.g + '&display=swap';
     document.head.appendChild(l);
   }
+  function loadFonts(t) { var th = THEMES[t]; if (th) { loadFont(th.d); loadFont(th.t); } }
+  // Colors: a custom theme picks paper, ink and accent; the in-between greys are mixed from them.
+  function hexRgb(h) { var n = parseInt(String(h).slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+  function mix(a, b, t) { var x = hexRgb(a), y = hexRgb(b); return '#' + [0, 1, 2].map(function (i) { return Math.round(x[i] + (y[i] - x[i]) * t).toString(16).padStart(2, '0'); }).join(''); }
+  function lum(h) { return hexRgb(h).map(function (v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }).reduce(function (s, v, i) { return s + v * [0.2126, 0.7152, 0.0722][i]; }, 0); }
+  function contrast(a, b) { var x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }
+  var CUSTOM_VARS = ['--paper', '--paper2', '--ink', '--muted', '--faint', '--line', '--accent', '--ok', '--display', '--text'];
+  function customVars(c) {
+    return { '--paper': c.paper, '--paper2': mix(c.paper, c.ink, 0.06), '--ink': c.ink, '--muted': mix(c.ink, c.paper, 0.4), '--faint': mix(c.ink, c.paper, 0.62),
+      '--line': mix(c.ink, c.paper, 0.84), '--accent': c.accent, '--ok': c.accent, '--display': fontStack(c.display), '--text': fontStack(c.text) };
+  }
   // theme(name) for guest-facing pages (unknown names fall back to the default); theme('') for the back office.
-  function theme(t) {
-    if (t !== '') t = THEMES[t] ? t : DEFAULT_THEME;
-    if (t) { loadFonts(t); document.body.setAttribute('data-theme', t); } else document.body.removeAttribute('data-theme');
-    var m = document.querySelector('meta[name=theme-color]'); if (m) m.setAttribute('content', t ? THEMES[t].paper : '#F2EDE3');
+  function theme(t, custom) {
+    var body = document.body;
+    CUSTOM_VARS.forEach(function (v) { body.style.removeProperty(v); });
+    body.removeAttribute('data-plain');
+    if (t === 'custom' && custom) {
+      var vars = customVars(custom);
+      Object.keys(vars).forEach(function (k) { body.style.setProperty(k, vars[k]); });
+      loadFont(custom.display); loadFont(custom.text);
+      body.setAttribute('data-theme', 'custom');
+      if (!(FONTS[custom.text] || {}).mono) body.setAttribute('data-plain', '1');
+    } else {
+      if (t !== '') t = THEMES[t] ? t : DEFAULT_THEME;
+      if (t) { loadFonts(t); body.setAttribute('data-theme', t); } else body.removeAttribute('data-theme');
+    }
+    var m = document.querySelector('meta[name=theme-color]'); if (m) m.setAttribute('content', t === 'custom' && custom ? custom.paper : t ? THEMES[t].paper : '#F2EDE3');
   }
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
@@ -145,19 +187,62 @@
   }
 
   // ---------- organizer: page settings ----------
-  function themeGrid(current) {
+  function swatch(paper, ink, d, t, name, sub) {
+    return '<span class="sw" style="background:' + paper + ';color:' + ink + '"><b style="font-family:' + fontStack(d) + '">Aa</b><i style="font-family:' + fontStack(t) + '">' + name + '</i><small style="font-family:' + fontStack(t) + '">' + sub + '</small></span>';
+  }
+  function themeGrid(current, custom) {
     Object.keys(THEMES).forEach(loadFonts);
+    var c = custom || startCustom(current);
     return '<div class="themes">' + Object.keys(THEMES).map(function (k) {
       var t = THEMES[k];
-      return '<label><input type="radio" name="theme" value="' + k + '"' + (current === k ? ' checked' : '') + '><span class="sw" style="background:' + t.paper + ';color:' + t.ink + '"><b style="font-family:' + t.display + (t.display === t.text ? ',ui-monospace,Menlo,monospace' : ',Georgia,serif') + '">Aa</b><i style="font-family:' + t.text + ',ui-monospace,Menlo,monospace">' + t.name + '</i><small style="font-family:' + t.text + ',ui-monospace,Menlo,monospace">' + t.type + '</small></span></label>';
-    }).join('') + '</div>';
+      return '<label><input type="radio" name="theme" value="' + k + '"' + (current === k ? ' checked' : '') + '>' + swatch(t.paper, t.ink, t.d, t.t, t.name, t.d === t.t ? t.d : t.d.split(' ')[0] + ' · ' + t.t) + '</label>';
+    }).join('') +
+      '<label><input type="radio" name="theme" value="custom"' + (current === 'custom' ? ' checked' : '') + '><span id="sw-custom">' + swatch(c.paper, c.ink, c.display, c.text, 'Custom', 'Your colors, your type') + '</span></label>' +
+      '</div>' + customEditor(c, current === 'custom');
   }
+  function startCustom(from) {
+    var t = THEMES[from] || THEMES[DEFAULT_THEME];
+    return { paper: t.paper, ink: t.ink, accent: t.accent, display: t.d, text: t.t };
+  }
+  function fontSelect(name, value) {
+    return '<select name="' + name + '" data-custom="1">' + Object.keys(FONTS).map(function (f) { return '<option' + (f === value ? ' selected' : '') + '>' + f + '</option>'; }).join('') + '</select>';
+  }
+  function customEditor(c, open) {
+    return '<div id="custom-ed" class="box"' + (open ? '' : ' hidden') + '><span class="sc">Custom theme</span>' +
+      '<div class="colors">' +
+      '<label><span>Background</span><input type="color" name="c_paper" data-custom="1" value="' + c.paper + '"></label>' +
+      '<label><span>Text</span><input type="color" name="c_ink" data-custom="1" value="' + c.ink + '"></label>' +
+      '<label><span>Accent</span><input type="color" name="c_accent" data-custom="1" value="' + c.accent + '"></label></div>' +
+      '<label><span>Titles</span>' + fontSelect('c_display', c.display) + '</label>' +
+      '<label><span>Text</span>' + fontSelect('c_text', c.text) + '</label>' +
+      '<div class="acts small"><span class="quiet">Start from</span>' + Object.keys(THEMES).map(function (k) { return '<button type="button" class="link small" data-act="customfrom" data-id="' + k + '">' + THEMES[k].name + '</button>'; }).join('') + '</div>' +
+      '<div id="custom-preview"></div></div>';
+  }
+  function readCustom() {
+    var f = document.getElementById('f-account'); if (!f) return null;
+    var v = function (n) { var el = f.elements.namedItem(n); return el ? el.value : ''; };
+    return { paper: v('c_paper'), ink: v('c_ink'), accent: v('c_accent'), display: v('c_display'), text: v('c_text') };
+  }
+  function renderCustomPreview() {
+    var c = readCustom(), el = document.getElementById('custom-preview'); if (!c || !el) return;
+    loadFont(c.display); loadFont(c.text);
+    var vars = customVars(c), ratio = contrast(c.paper, c.ink);
+    el.innerHTML = '<div style="background:' + c.paper + ';color:' + c.ink + ';border:1px solid ' + vars['--line'] + ';padding:22px 18px;display:flex;flex-direction:column;gap:10px;text-align:center">' +
+      '<span style="font:500 11px/1.3 ' + vars['--text'] + ';letter-spacing:.12em;text-transform:uppercase;color:' + vars['--muted'] + '">' + esc(org.name) + ' invites you</span>' +
+      '<span style="font:400 30px/1.1 ' + vars['--display'] + '">Name of the night</span>' +
+      '<span style="font:400 15px/1.4 ' + vars['--text'] + ';color:' + c.accent + '">Saturday 31 October, 23:00</span>' +
+      '<span style="font:400 14px/1.5 ' + vars['--text'] + ';color:' + vars['--muted'] + '">Sunset to sunrise. Dress up.</span>' +
+      '<span style="align-self:center;margin-top:6px;background:' + c.ink + ';color:' + c.paper + ';font:500 12px/1 ' + vars['--text'] + ';letter-spacing:.12em;padding:13px 26px">RSVP</span></div>' +
+      (ratio < 4.5 ? '<p class="err small" style="margin-top:8px">Low contrast between background and text: guests may struggle to read.</p>' : '');
+    var sw = document.getElementById('sw-custom'); if (sw) sw.innerHTML = swatch(c.paper, c.ink, c.display, c.text, 'Custom', 'Your colors, your type');
+  }
+
   function viewAccount() {
     if (!org) return go('/login', true);
     header(); setNav('account');
     var inv = location.origin + '/' + org.handle + '?i=' + org.invite_token;
     main.innerHTML = '<div class="stack lg"><div class="toolbar"><h1>Your page</h1><a class="btn small line" href="/' + esc(org.handle) + '">View</a></div>' +
-      '<div class="stack"><span class="sc">Logo</span><div class="box" style="align-items:center;background:' + (THEMES[org.theme] || THEMES[DEFAULT_THEME]).paper + ';color:' + (THEMES[org.theme] || THEMES[DEFAULT_THEME]).ink + '">' + (org.logo ? logoImg(org.logo) : '<p class="quiet small">No logo yet. A square or wide mark on a transparent background looks best.</p>') +
+      '<div class="stack"><span class="sc">Logo</span><div class="box" style="align-items:center;background:' + (org.custom && org.theme === 'custom' ? org.custom : THEMES[org.theme] || THEMES[DEFAULT_THEME]).paper + ';color:' + (org.custom && org.theme === 'custom' ? org.custom : THEMES[org.theme] || THEMES[DEFAULT_THEME]).ink + '">' + (org.logo ? logoImg(org.logo) : '<p class="quiet small">No logo yet. A square or wide mark on a transparent background looks best.</p>') +
       '<div class="acts"><label class="btn small line" style="flex-direction:row;cursor:pointer">' + (org.logo ? 'Replace' : 'Upload a logo') + '<input type="file" id="up-logo" accept="image/png,image/jpeg,image/webp" hidden></label>' +
       (org.logo ? '<button class="link small" data-act="rmlogo">Remove</button>' : '') + '</div></div></div>' +
       '<form id="f-account">' +
@@ -165,7 +250,7 @@
       '<label><span>Name</span><input name="name" maxlength="80" required value="' + esc(org.name) + '"></label>' +
       kindSeg(org.kind) +
       '<label><span>Bio</span><textarea name="bio" maxlength="600" placeholder="A few words about you, your nights, your music.">' + esc(org.bio) + '</textarea></label>' +
-      '<div class="stack" style="gap:8px"><span class="sc" style="font-size:13px">Theme</span>' + themeGrid(THEMES[org.theme] ? org.theme : DEFAULT_THEME) + '</div>' +
+      '<div class="stack" style="gap:8px"><span class="sc" style="font-size:13px">Theme</span>' + themeGrid(org.theme === 'custom' || THEMES[org.theme] ? org.theme : DEFAULT_THEME, org.custom) + '</div>' +
       '<div class="stack" style="gap:8px"><span class="sc" style="font-size:13px">Who can see your events</span><div class="seg">' +
       '<label><input type="radio" name="visibility" value="public"' + (org.visibility !== 'private' ? ' checked' : '') + '><span>Everyone</span></label>' +
       '<label><input type="radio" name="visibility" value="private"' + (org.visibility === 'private' ? ' checked' : '') + '><span>By invitation</span></label></div>' +
@@ -175,6 +260,7 @@
       '<p class="quiet small">Whoever opens it can see your events and join your community, even when your page is by invitation.</p>' +
       '<div class="acts"><button class="btn small" data-act="copylink" data-id="' + esc(inv) + '">Copy link</button><button class="link small" data-act="newinvite">Make a new link</button></div></div>' +
       '<hr class="rule"><p class="quiet small">' + esc(org.email) + ' · <button class="link small" data-act="logout">Log out</button></p></div>';
+    renderCustomPreview();
   }
   // Logos keep their shape and transparency; resized in the browser.
   function prepareLogo(file) {
@@ -347,7 +433,7 @@
     var i = new URLSearchParams(location.search).get('i') || '';
     api('GET', '/o/' + handle + (i ? '?i=' + encodeURIComponent(i) : '')).then(function (j) {
       var o = j.org;
-      header('guest'); theme(o.theme);
+      header('guest'); theme(o.theme, o.custom);
       document.title = o.name + ' — rsvp.fm';
       var h = '<div class="stack lg">';
       if (j.is_owner) h += '<p class="quiet small center">This is your page · <a href="/account">Edit</a></p>';
@@ -380,7 +466,7 @@
     var t = tokenFor(id);
     api('GET', '/p/' + id + (t ? '?t=' + encodeURIComponent(t) : '')).then(function (j) {
       var e = j.event, host = e.host, h = '<div class="stack lg">';
-      header('guest'); theme(host.theme);
+      header('guest'); theme(host.theme, host.custom);
       document.title = e.title + ' — ' + host.name;
       h += '<div class="stack center">' + (host.logo ? '<a href="/' + esc(host.handle) + '" style="text-decoration:none">' + logoImg(host.logo, 'mark') + '</a>' : '') +
         '<p class="sc"><a href="/' + esc(host.handle) + '" style="text-decoration:none">' + esc(host.name) + '</a> invites you</p><h1>' + esc(e.title) + '</h1>' +
@@ -482,6 +568,12 @@
       });
       return;
     }
+    if (act === 'customfrom') {
+      var st = startCustom(id), f2 = document.getElementById('f-account');
+      f2.elements.namedItem('c_paper').value = st.paper; f2.elements.namedItem('c_ink').value = st.ink; f2.elements.namedItem('c_accent').value = st.accent;
+      f2.elements.namedItem('c_display').value = st.display; f2.elements.namedItem('c_text').value = st.text;
+      renderCustomPreview(); return;
+    }
     if (act === 'logout') { api('POST', '/logout').then(function () { org = null; go('/', true); }); return; }
     if (act === 'plogout') { api('POST', '/people/logout').then(function () { person = null; go('/', true); }); return; }
     b.disabled = true;
@@ -513,7 +605,14 @@
       api('DELETE', '/events/' + id).then(function () { say('Deleted.'); go('/', true); }).catch(function (e) { say(e.message); done(); });
     }
   });
+  function onCustomInput(ev) {
+    var t = ev.target;
+    if (t.name === 'theme') { var ed = document.getElementById('custom-ed'); if (ed) ed.hidden = t.value !== 'custom'; return; }
+    if (t.getAttribute && t.getAttribute('data-custom')) renderCustomPreview();
+  }
+  document.addEventListener('input', onCustomInput);
   document.addEventListener('change', function (ev) {
+    onCustomInput(ev);
     if (ev.target.id !== 'up-logo' || !ev.target.files[0]) return;
     say('Uploading…');
     prepareLogo(ev.target.files[0]).then(function (data) { return api('POST', '/me/logo', { data: data }); })
@@ -538,6 +637,7 @@
         go(safeNext || (asGuest ? '/me' : '/'), true);
       }).catch(fail);
     } else if (f.id === 'f-account') {
+      d.custom = readCustom();
       api('PATCH', '/me', d).then(function (j) { org = j.org; say('Saved.'); viewAccount(); }).catch(fail);
     } else if (f.id === 'f-event') {
       var eid = f.getAttribute('data-id');

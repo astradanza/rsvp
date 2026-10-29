@@ -159,3 +159,14 @@ body[data-theme=nocturne] .when{font-style:italic;font-family:var(--display);fon
 
 .themes .sw small{font-size:10px;opacity:.6;letter-spacing:.02em;text-transform:none}
 .themes .sw{height:108px}
+
+/* custom theme: editor, and sizes when the text font is not monospace */
+.colors{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.colors input[type=color]{height:44px;padding:0;border:1px solid var(--line);cursor:pointer;background:none}
+.colors input[type=color]::-webkit-color-swatch-wrapper{padding:3px}
+.colors input[type=color]::-webkit-color-swatch{border:0}
+body[data-theme=custom][data-plain]{font-size:17px;line-height:1.55}
+body[data-theme=custom][data-plain] input,body[data-theme=custom][data-plain] textarea,body[data-theme=custom][data-plain] select{font-size:18px}
+body[data-theme=custom][data-plain] h1{font-size:42px;font-weight:400}
+body[data-theme=custom][data-plain] .bio,body[data-theme=custom][data-plain] .item .t,body[data-theme=custom][data-plain] .guest .n,body[data-theme=custom][data-plain] .details{font-size:18px}
+body[data-theme=custom][data-plain] .when{font-size:19px}

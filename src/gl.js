@@ -8,6 +8,18 @@ const SESSION_DAYS = 60;
 const KINDS = ['promoter', 'label', 'artist'];
 const THEMES = ['terminal', 'phosphor', 'amber', 'graphite', 'solarized', 'nocturne'];
 const DEFAULT_THEME = 'terminal';
+// Fonts allowed in a custom theme (the app loads them from Google Fonts)
+const FONTS = ['JetBrains Mono', 'IBM Plex Mono', 'Space Mono', 'Fira Code', 'Source Code Pro', 'DM Mono', 'Instrument Serif', 'Cormorant Garamond',
+  'EB Garamond', 'Playfair Display', 'Fraunces', 'Bodoni Moda', 'Libre Caslon Text', 'Inter', 'Jost', 'Space Grotesk', 'Syne', 'Archivo'];
+const HEX_RE = /^#[0-9a-f]{6}$/i;
+function customOf(o) {
+  try {
+    const c = JSON.parse(o.custom_theme || o.org_custom_theme || 'null');
+    if (c && HEX_RE.test(c.paper) && HEX_RE.test(c.ink) && HEX_RE.test(c.accent) && FONTS.includes(c.display) && FONTS.includes(c.text)) return c;
+  } catch { /* none */ }
+  return null;
+}
+function themeOf(theme, custom) { return theme === 'custom' && custom ? 'custom' : THEMES.includes(theme) ? theme : DEFAULT_THEME; }
 const RESERVED = new Set(['api', 'e', 'new', 'login', 'signup', 'logout', 'account', 'community', 'me', 'img', 'app', 'style', 'favicon',
   'admin', 'settings', 'help', 'about', 'terms', 'privacy', 'www', 'list', 'rsvp', 'events', 'event', 'invite', 'join', 'guest', 'guests']);
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,29}$/;
@@ -103,7 +115,8 @@ async function ensureSchema(env) {
   ]);
   await addColumns(env, 'gl_orgs', [
     ['handle', 'TEXT'], ['bio', "TEXT NOT NULL DEFAULT ''"], ['logo', "TEXT NOT NULL DEFAULT ''"],
-    ['theme', "TEXT NOT NULL DEFAULT 'creme'"], ['visibility', "TEXT NOT NULL DEFAULT 'public'"], ['invite_token', 'TEXT']
+    ['theme', "TEXT NOT NULL DEFAULT 'creme'"], ['visibility', "TEXT NOT NULL DEFAULT 'public'"], ['invite_token', 'TEXT'],
+    ['custom_theme', "TEXT NOT NULL DEFAULT ''"]
   ]);
   await addColumns(env, 'gl_guests', [['consent', 'INTEGER NOT NULL DEFAULT 0']]);
   await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS gl_orgs_handle ON gl_orgs(handle)').run();
@@ -161,9 +174,9 @@ async function startPersonSession(env, personId, url) {
 // ---------- shapes ----------
 const orgShape = (o) => ({
   name: o.name, kind: o.kind, email: o.email, handle: o.handle, bio: o.bio || '', logo: o.logo || '',
-  theme: THEMES.includes(o.theme) ? o.theme : DEFAULT_THEME, visibility: o.visibility || 'public', invite_token: o.invite_token
+  theme: themeOf(o.theme, customOf(o)), custom: customOf(o), visibility: o.visibility || 'public', invite_token: o.invite_token
 });
-const publicOrg = (o) => ({ name: o.name, kind: o.kind, handle: o.handle, bio: o.bio || '', logo: o.logo || '', theme: THEMES.includes(o.theme) ? o.theme : DEFAULT_THEME, visibility: o.visibility || 'public' });
+const publicOrg = (o) => ({ name: o.name, kind: o.kind, handle: o.handle, bio: o.bio || '', logo: o.logo || '', theme: themeOf(o.theme, customOf(o)), custom: customOf(o), visibility: o.visibility || 'public' });
 const personShape = (p) => ({ name: p.name, email: p.email });
 
 function eventFields(b) {
@@ -261,7 +274,14 @@ async function api(request, env, url) {
     const name = str(b.name, 80) || org.name;
     const kind = KINDS.includes(b.kind) ? b.kind : org.kind;
     const bio = typeof b.bio === 'string' ? b.bio.replace(/\r\n/g, '\n').trim().slice(0, 600) : org.bio;
-    const theme = THEMES.includes(b.theme) ? b.theme : THEMES.includes(org.theme) ? org.theme : DEFAULT_THEME;
+    let custom = org.custom_theme || '';
+    if (b.custom && typeof b.custom === 'object') {
+      const c = { paper: String(b.custom.paper || ''), ink: String(b.custom.ink || ''), accent: String(b.custom.accent || ''), display: String(b.custom.display || ''), text: String(b.custom.text || '') };
+      if (!HEX_RE.test(c.paper) || !HEX_RE.test(c.ink) || !HEX_RE.test(c.accent)) fail(400, 'Pick valid colors.');
+      if (!FONTS.includes(c.display) || !FONTS.includes(c.text)) fail(400, 'Pick fonts from the list.');
+      custom = JSON.stringify(c);
+    }
+    const theme = b.theme === 'custom' && custom ? 'custom' : THEMES.includes(b.theme) ? b.theme : themeOf(org.theme, customOf(org));
     const visibility = b.visibility === 'private' ? 'private' : b.visibility === 'public' ? 'public' : org.visibility;
     let handle = org.handle;
     if (typeof b.handle === 'string' && b.handle.trim().toLowerCase().replace(/^@/, '') !== org.handle) {
@@ -271,9 +291,9 @@ async function api(request, env, url) {
       if (await env.DB.prepare('SELECT 1 FROM gl_orgs WHERE handle = ? AND id != ?').bind(handle, org.id).first()) fail(409, 'That address is taken.');
       if (await env.DB.prepare('SELECT 1 FROM gl_events WHERE id = ?').bind(handle).first()) fail(409, 'That address is taken.');
     }
-    await env.DB.prepare('UPDATE gl_orgs SET name = ?, kind = ?, bio = ?, theme = ?, visibility = ?, handle = ? WHERE id = ?')
-      .bind(name, kind, bio, theme, visibility, handle, org.id).run();
-    return json({ org: orgShape({ ...org, name, kind, bio, theme, visibility, handle }) });
+    await env.DB.prepare('UPDATE gl_orgs SET name = ?, kind = ?, bio = ?, theme = ?, visibility = ?, handle = ?, custom_theme = ? WHERE id = ?')
+      .bind(name, kind, bio, theme, visibility, handle, custom, org.id).run();
+    return json({ org: orgShape({ ...org, name, kind, bio, theme, visibility, handle, custom_theme: custom }) });
   }
   if (path === '/api/me/logo' && method === 'POST') {
     need();
@@ -487,9 +507,9 @@ async function api(request, env, url) {
 
   // --- public: an event page ---
   if (seg[0] === 'p' && seg[1]) {
-    const e = await env.DB.prepare('SELECT e.*, o.name AS org_name, o.kind AS org_kind, o.handle AS org_handle, o.logo AS org_logo, o.theme AS org_theme, o.visibility AS org_visibility FROM gl_events e JOIN gl_orgs o ON o.id = e.org_id WHERE e.id = ?').bind(String(seg[1])).first();
+    const e = await env.DB.prepare('SELECT e.*, o.name AS org_name, o.kind AS org_kind, o.handle AS org_handle, o.logo AS org_logo, o.theme AS org_theme, o.custom_theme AS org_custom_theme, o.visibility AS org_visibility FROM gl_events e JOIN gl_orgs o ON o.id = e.org_id WHERE e.id = ?').bind(String(seg[1])).first();
     if (!e) fail(404, 'This guestlist does not exist.');
-    const shape = { ...eventShape(e), host: { name: e.org_name, kind: e.org_kind, handle: e.org_handle, logo: e.org_logo || '', theme: THEMES.includes(e.org_theme) ? e.org_theme : DEFAULT_THEME, visibility: e.org_visibility } };
+    const shape = { ...eventShape(e), host: { name: e.org_name, kind: e.org_kind, handle: e.org_handle, logo: e.org_logo || '', theme: themeOf(e.org_theme, customOf(e)), custom: customOf(e), visibility: e.org_visibility } };
     delete shape.auto_confirm;
     if (seg.length === 2 && method === 'GET') {
       const t = url.searchParams.get('t');
