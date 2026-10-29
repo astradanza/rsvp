@@ -49,7 +49,7 @@ function token() {
   const a = crypto.getRandomValues(new Uint8Array(32));
   return btoa(String.fromCharCode(...a)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
-const slugify = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24);
+const slugify = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24).replace(/-+$/, '');
 
 // ---------- passwords (PBKDF2-SHA256) ----------
 const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
@@ -157,12 +157,13 @@ async function ensureSchema(env) {
   // every event gets a readable address: rsvp.fm/<handle>/<slug>
   const noSlug = (await env.DB.prepare('SELECT id, org_id, title FROM gl_events WHERE slug IS NULL').all()).results;
   for (const e of noSlug) await env.DB.prepare('UPDATE gl_events SET slug = ? WHERE id = ?').bind(await freeSlug(env, e.org_id, e.title, e.id), e.id).run();
+  await env.DB.prepare("UPDATE OR IGNORE gl_events SET slug = rtrim(slug, '-') WHERE slug LIKE '%-'").run();
   await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS gl_events_slug ON gl_events(org_id, slug)').run();
   ready = true;
 }
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,59}$/;
 async function freeSlug(env, orgId, title, selfId) {
-  let base = slugify(title).slice(0, 50) || 'event';
+  let base = slugify(title) || 'event';
   let s = base;
   for (let i = 2; await env.DB.prepare('SELECT 1 FROM gl_events WHERE org_id = ? AND slug = ? AND id != ?').bind(orgId, s, selfId || '').first(); i++) s = base + '-' + i;
   return s;
