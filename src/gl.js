@@ -469,7 +469,7 @@ async function api(request, env, url) {
       if (n > 60) fail(429, 'Too many requests right now. Try again in a minute.');
       const open = o.visibility === 'public' || inviteOk;
       const status = await upsertContact(env, o.id, {
-        email, name, status: open ? 'member' : 'requested', consent: b.consent !== false,
+        email, name, status: open ? 'member' : 'requested', consent: true,
         source: open ? (inviteOk ? 'invitation link' : 'page') : 'request', note: str(b.note, 300)
       });
       const headers = {};
@@ -501,6 +501,24 @@ async function api(request, env, url) {
         person: person ? personShape(person) : null
       });
     }
+    // After the RSVP: join the organizer's page (their next invitations by email), optionally with a password.
+    if (seg[2] === 'keep' && method === 'POST') {
+      const b = await body(request);
+      let g = b.t ? await env.DB.prepare('SELECT * FROM gl_guests WHERE event_id = ? AND token = ?').bind(e.id, String(b.t)).first() : null;
+      if (!g && person) g = await env.DB.prepare('SELECT * FROM gl_guests WHERE event_id = ? AND email = ?').bind(e.id, person.email).first();
+      if (!g) fail(403, 'RSVP first.');
+      await env.DB.prepare('UPDATE gl_guests SET consent = 1 WHERE id = ?').bind(g.id).run();
+      await upsertContact(env, e.org_id, { email: g.email, name: g.name, status: 'member', consent: true, source: 'rsvp · ' + e.title.slice(0, 60) });
+      const headers = {};
+      let created = null;
+      if (!person && b.password) {
+        if (String(b.password).length < 8) fail(400, 'Use at least 8 characters for your password.');
+        if (await env.DB.prepare('SELECT 1 FROM gl_people WHERE email = ?').bind(g.email).first()) fail(409, 'You already have a password for ' + g.email + '. Log in instead.');
+        created = await env.DB.prepare('INSERT INTO gl_people (email, name, password_hash) VALUES (?, ?, ?) RETURNING *').bind(g.email, g.name, await hashPassword(String(b.password))).first();
+        headers['set-cookie'] = await startPersonSession(env, created.id, url);
+      }
+      return json({ ok: true, person: created ? personShape(created) : null }, 200, headers);
+    }
     if (seg[2] === 'rsvp' && method === 'POST') {
       if (!e.open) fail(403, 'This guestlist is closed.');
       const b = await body(request);
@@ -509,20 +527,19 @@ async function api(request, env, url) {
       if (name.length < 2) fail(400, 'Enter your full name.');
       if (!EMAIL_RE.test(email)) fail(400, 'Enter a valid email address.');
       const plus = Math.max(0, Math.min(e.plus_max, Math.round(Number(b.plus) || 0)));
-      const consent = b.consent !== false ? 1 : 0;
       const { n } = await env.DB.prepare(`SELECT COUNT(*) AS n FROM gl_guests WHERE event_id = ? AND created_at > datetime('now', '-1 minute')`).bind(e.id).first();
       if (n > 60) fail(429, 'Too many requests right now. Try again in a minute.');
       const prev = await env.DB.prepare('SELECT * FROM gl_guests WHERE event_id = ? AND email = ?').bind(e.id, email).first();
       const fresh = e.auto_confirm ? 'confirmed' : 'requested';
-      // Whoever RSVPs through the event link joins the organizer's community; consent decides the emails.
-      await upsertContact(env, e.org_id, { email, name, status: 'member', consent: !!consent, source: 'rsvp · ' + e.title.slice(0, 60) });
+      // Whoever RSVPs through the event link joins the organizer's community. Emails only once they choose to join the page, after the RSVP.
+      await upsertContact(env, e.org_id, { email, name, status: 'member', source: 'rsvp · ' + e.title.slice(0, 60) });
       if (prev) {
         const status = prev.status === 'declined' ? prev.status : prev.status === 'confirmed' && plus <= prev.plus ? 'confirmed' : fresh;
-        await env.DB.prepare(`UPDATE gl_guests SET name = ?, plus = ?, status = ?, consent = ?, updated_at = datetime('now') WHERE id = ?`).bind(name, plus, status, consent, prev.id).run();
+        await env.DB.prepare(`UPDATE gl_guests SET name = ?, plus = ?, status = ?, updated_at = datetime('now') WHERE id = ?`).bind(name, plus, status, prev.id).run();
         return json({ status, token: prev.token });
       }
       const t = token();
-      await env.DB.prepare('INSERT INTO gl_guests (event_id, name, email, plus, status, token, consent) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(e.id, name, email, plus, fresh, t, consent).run();
+      await env.DB.prepare('INSERT INTO gl_guests (event_id, name, email, plus, status, token) VALUES (?, ?, ?, ?, ?, ?)').bind(e.id, name, email, plus, fresh, t).run();
       return json({ status: fresh, token: t }, 201);
     }
   }

@@ -338,9 +338,9 @@
         '<label><span>Full name</span><input name="name" maxlength="100" required autocomplete="name"></label>' +
         '<label><span>Email</span><input name="email" type="email" required autocomplete="email"></label>') +
       (mode === 'request' ? '<label><span>A word for ' + esc(o.name) + ' (optional)</span><input name="note" maxlength="300" placeholder="Who you know, where we met…"></label>' : '') +
-      '<label class="consent"><input type="checkbox" name="consent" checked><span>I agree that ' + esc(o.name) + ' sends me their next invitations by email.</span></label>' +
       (p ? '' : '<label><span>Password (optional)</span><input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="To receive invitations here on rsvp.fm"></label>') +
-      '<p class="err" id="err" hidden></p><button class="btn wide" type="submit">' + (mode === 'request' ? 'Request an invitation' : 'Keep me posted') + '</button></form>';
+      '<p class="err" id="err" hidden></p><button class="btn wide" type="submit">' + (mode === 'request' ? 'Request an invitation' : 'Join ' + esc(o.name)) + '</button>' +
+      '<p class="quiet small center">By joining, you agree that ' + esc(o.name) + ' emails you their next invitations.</p></form>';
   }
   function viewOrg(handle) {
     loading();
@@ -402,7 +402,6 @@
       '<label><span>Full name</span><input name="name" maxlength="100" required autocomplete="name" value="' + esc(v.name || '') + '"></label>' +
       '<label><span>Email</span><input name="email" type="email" required autocomplete="email" value="' + esc(v.email || '') + '"></label>' +
       (e.plus_max ? '<label><span>Coming</span><select name="plus">' + opts + '</select></label>' : '') +
-      '<label class="consent"><input type="checkbox" name="consent"' + (v.consent === false ? '' : ' checked') + '><span>Keep me posted: I agree that ' + esc(e.host.name) + ' sends me their next invitations by email.</span></label>' +
       '<p class="err" id="err" hidden></p><button class="btn wide" type="submit">RSVP</button></form>' +
       '<p class="quiet small center">Your name and email go to ' + esc(e.host.name) + ' only.</p></div>';
   }
@@ -415,13 +414,24 @@
       (!no && e.open ? '<p><button class="link small" data-act="editrsvp" data-id="' + esc(id) + '">Change my RSVP</button></p>' : '') + '</div>';
   }
   // After the RSVP: receive the next invitations here, with a password.
+  // After the RSVP: join the organizer's page to get their next invitations, and keep them here with a password.
   function afterRsvp(e, m, id) {
-    if (person) return '<p class="quiet small center">' + esc(e.host.name) + '\'s next invitations land in <a href="/me">My invitations</a>.</p>';
-    if (m.has_account) return '<p class="quiet small center"><a href="/login?as=guest&amp;next=' + encodeURIComponent('/' + id) + '">Log in</a> to see all your invitations.</p>';
-    return '<div class="box"><span class="sc">Next time</span><h2 style="font-size:24px">Get ' + esc(e.host.name) + '\'s next invitations on rsvp.fm</h2>' +
-      '<p class="quiet small">Choose a password: their next guestlists will be waiting for you here, one tap to RSVP.</p>' +
-      '<form id="f-person" data-id="' + esc(id) + '"><label><span>Password for ' + esc(m.email) + '</span><input name="password" type="password" minlength="8" required autocomplete="new-password"></label>' +
-      '<p class="err" id="err" hidden></p><button class="btn" type="submit">Keep me posted</button></form></div>';
+    var host = esc(e.host.name);
+    if (m.consent) {
+      if (person) return '<p class="quiet small center">You\'re in ' + host + '\'s community. Their next invitations land in <a href="/me">My invitations</a>.</p>';
+      if (m.has_account) return '<p class="quiet small center">You\'re in ' + host + '\'s community. <a href="/login?as=guest&amp;next=' + encodeURIComponent('/' + id) + '">Log in</a> to see all your invitations.</p>';
+      return '<div class="box"><span class="sc">You\'re in ' + host + '\'s community</span>' +
+        '<p class="quiet small">Choose a password to find their next invitations here on rsvp.fm, one tap to RSVP.</p>' +
+        '<form id="f-person" data-id="' + esc(id) + '"><label><span>Password for ' + esc(m.email) + '</span><input name="password" type="password" minlength="8" required autocomplete="new-password"></label>' +
+        '<p class="err" hidden></p><button class="btn" type="submit">Create my account</button></form></div>';
+    }
+    var withPassword = !person && !m.has_account;
+    return '<div class="box"><span class="sc">Next time</span><h2 style="font-size:24px">Join ' + host + '\'s page</h2>' +
+      '<p class="quiet small">Be the first to receive their next invitations.</p>' +
+      '<form id="f-keep" data-id="' + esc(id) + '">' +
+      (withPassword ? '<label><span>Password (optional)</span><input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="To find them here on rsvp.fm"></label>' : '') +
+      '<p class="err" hidden></p><button class="btn" type="submit">Join ' + host + '</button>' +
+      '<p class="quiet small">By joining, you agree that ' + host + ' emails you their next invitations.</p></form></div>';
   }
 
   // ---------- guests: my invitations ----------
@@ -545,6 +555,12 @@
       var pid = f.getAttribute('data-id');
       api('POST', '/people/signup', { event: pid, t: tokenFor(pid), password: d.password }).then(function (j) {
         person = j.person; say('Done. Your next invitations will be waiting here.'); viewGuest(pid);
+      }).catch(fail);
+    } else if (f.id === 'f-keep') {
+      var kid = f.getAttribute('data-id');
+      api('POST', '/p/' + kid + '/keep', { t: tokenFor(kid), password: d.password || '' }).then(function (r) {
+        if (r.person) person = r.person;
+        say('You joined. Their next invitations will reach you.'); viewGuest(kid);
       }).catch(fail);
     } else if (f.id === 'f-join') {
       d.i = f.getAttribute('data-i');
