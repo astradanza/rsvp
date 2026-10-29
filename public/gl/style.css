@@ -90,7 +90,7 @@ input[type=datetime-local]{min-height:42px}
 .stats{display:flex;gap:28px;flex-wrap:wrap}
 .stat b{display:block;font:400 40px/1 var(--display)}
 .stat span{font:500 12px/1.3 var(--text);letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
-.box{border:1px solid var(--line);padding:18px;display:flex;flex-direction:column;gap:12px;background:rgba(255,255,255,.25)}
+.box{border:1px solid var(--line);padding:18px;display:flex;flex-direction:column;gap:12px;background:var(--paper2)}
 .linkline{font:400 17px/1.4 var(--text);overflow-wrap:anywhere}
 .card{border:1px solid var(--ink);padding:28px 22px;text-align:center;display:flex;flex-direction:column;gap:12px;align-items:center}
 .card h2{font-size:34px}
@@ -101,3 +101,40 @@ input[type=datetime-local]{min-height:42px}
   .two{grid-template-columns:1fr}
   .stat b{font-size:34px}
 }
+
+/* ---------- themes (organizer pages and their event pages) ---------- */
+body{transition:background-color .2s}
+body[data-theme=nuit]{--paper:#121110;--paper2:#1C1A18;--ink:#EDE6D8;--muted:#A39B8C;--faint:#6F685D;--line:#2F2C28;--accent:#C9A66B;--ok:#9DBB8F;--display:'Playfair Display',Georgia,serif;--text:'EB Garamond',Georgia,serif}
+body[data-theme=galerie]{--paper:#FBFAF7;--paper2:#F1EFEA;--ink:#0E0E0E;--muted:#6B6B6B;--faint:#A3A3A3;--line:#E2E0DA;--accent:#B3261E;--ok:#2F4F3A;--display:'Bodoni Moda',Didot,Georgia,serif;--text:'Libre Caslon Text',Georgia,serif}
+body[data-theme=sauge]{--paper:#DDE2D4;--paper2:#D1D8C6;--ink:#1F2A22;--muted:#56614F;--faint:#87917F;--line:#BFC8B2;--accent:#6B3A1F;--ok:#1F4A2E;--display:'Fraunces',Georgia,serif;--text:'EB Garamond',Georgia,serif}
+body[data-theme=bordeaux]{--paper:#4E1A18;--paper2:#5B2220;--ink:#F3E7D6;--muted:#D2B9A3;--faint:#A6877A;--line:#6E302C;--accent:#E8C07A;--ok:#E8D7A0;--display:'Cormorant Garamond',Georgia,serif;--text:'EB Garamond',Georgia,serif}
+body[data-theme=minuit]{--paper:#141B2B;--paper2:#1B2437;--ink:#E9E4D8;--muted:#A3A9B8;--faint:#6B7387;--line:#2A3448;--accent:#D9B36C;--ok:#A9C7A0;--display:'Libre Caslon Display','Libre Caslon Text',Georgia,serif;--text:'Libre Caslon Text',Georgia,serif}
+body[data-theme] .btn:hover{background:var(--ink);opacity:.88}
+body[data-theme=galerie] h1,body[data-theme=galerie] h2{letter-spacing:-.02em}
+body[data-theme=galerie] .when,body[data-theme=minuit] .when{font-style:italic}
+
+/* organizer page */
+.logo{display:flex;justify-content:center}
+.logo img{max-width:180px;max-height:140px;object-fit:contain;display:block}
+.logo.mark img{max-width:96px;max-height:72px}
+.bio{white-space:pre-wrap;color:var(--muted);font-size:19px;max-width:30em;margin:0 auto}
+.themes{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.themes label{position:relative;cursor:pointer;margin:0}
+.themes input{position:absolute;opacity:0;width:1px;height:1px}
+.themes .sw{display:flex;flex-direction:column;justify-content:flex-end;gap:2px;height:92px;padding:10px;border:1px solid var(--line)}
+.themes .sw b{font-weight:400;font-size:22px;line-height:1}
+.themes .sw i{font-style:normal;font-size:11px;letter-spacing:.14em;text-transform:uppercase;opacity:.7}
+.themes input:checked+.sw{outline:2px solid var(--ink);outline-offset:2px}
+.prefix{display:flex;align-items:baseline;gap:2px;border-bottom:1px solid var(--ink)}
+.prefix em{font-style:normal;color:var(--muted);white-space:nowrap}
+.prefix input{border:0;padding-left:0}
+.consent{flex-direction:row;align-items:flex-start;gap:10px;cursor:pointer}
+.consent input{width:18px;height:18px;margin:3px 0 0;flex-shrink:0;-webkit-appearance:auto;appearance:auto;accent-color:var(--ink)}
+.consent span{font:400 16px/1.45 var(--text);letter-spacing:0;text-transform:none;color:var(--ink)}
+.tabs2{display:flex;gap:18px;justify-content:center}
+.tabs2 button{background:none;border:0;padding:4px 0;font:500 13px/1.3 var(--text);letter-spacing:.14em;text-transform:uppercase;color:var(--muted);cursor:pointer;border-bottom:1px solid transparent}
+.tabs2 button.on{color:var(--ink);border-color:var(--ink)}
+@media (max-width:480px){.themes{grid-template-columns:repeat(2,1fr)}}
+
+.themes .sw b{text-transform:none;letter-spacing:0;font-size:24px;color:inherit}
+.themes .sw i{color:inherit}

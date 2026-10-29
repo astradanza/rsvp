@@ -1,12 +1,33 @@
-// rsvp.fm — Guestlist. One page per event for guests; a small back office for organizers.
+// rsvp.fm — Guestlist. Organizer pages and event pages for guests; a small back office for organizers.
 (function () {
   'use strict';
   var main = document.getElementById('main');
   var hdr = document.getElementById('hdr');
-  var org = null;
+  var org = null, person = null;
   var KINDS = { promoter: 'Promoter', label: 'Label', artist: 'Artist' };
   var DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  // Six themes for organizer pages: colors and type. Fonts load when a theme is shown.
+  var THEMES = {
+    creme: { name: 'Crème', paper: '#F2EDE3', ink: '#1C1B19', display: "'Cormorant Garamond'", fonts: '' },
+    nuit: { name: 'Nuit', paper: '#121110', ink: '#EDE6D8', display: "'Playfair Display'", fonts: 'Playfair+Display:ital,wght@0,400;0,500;1,400' },
+    galerie: { name: 'Galerie', paper: '#FBFAF7', ink: '#0E0E0E', display: "'Bodoni Moda'", fonts: 'Bodoni+Moda:ital,opsz,wght@0,6..96,400;0,6..96,500;1,6..96,400&family=Libre+Caslon+Text:ital,wght@0,400;1,400' },
+    sauge: { name: 'Sauge', paper: '#DDE2D4', ink: '#1F2A22', display: "'Fraunces'", fonts: 'Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;1,9..144,400' },
+    bordeaux: { name: 'Bordeaux', paper: '#4E1A18', ink: '#F3E7D6', display: "'Cormorant Garamond'", fonts: '' },
+    minuit: { name: 'Minuit', paper: '#141B2B', ink: '#E9E4D8', display: "'Libre Caslon Display'", fonts: 'Libre+Caslon+Display&family=Libre+Caslon+Text:ital,wght@0,400;1,400' }
+  };
+  var loadedFonts = {};
+  function loadFonts(t) {
+    var th = THEMES[t]; if (!th || !th.fonts || loadedFonts[t]) return;
+    loadedFonts[t] = 1;
+    var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'https://fonts.googleapis.com/css2?family=' + th.fonts + '&display=swap';
+    document.head.appendChild(l);
+  }
+  function theme(t) {
+    t = THEMES[t] ? t : '';
+    if (t && t !== 'creme') { loadFonts(t); document.body.setAttribute('data-theme', t); } else document.body.removeAttribute('data-theme');
+    var m = document.querySelector('meta[name=theme-color]'); if (m) m.setAttribute('content', (THEMES[t] || THEMES.creme).paper);
+  }
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function api(method, path, data) {
@@ -14,7 +35,7 @@
     if (data !== undefined) { opts.headers['content-type'] = 'application/json'; opts.body = JSON.stringify(data); }
     return fetch('/api' + path, opts).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (j) {
-        if (!r.ok) throw new Error(j.error || 'Something went wrong.');
+        if (!r.ok) { var e = new Error(j.error || 'Something went wrong.'); e.status = r.status; throw e; }
         return j;
       });
     });
@@ -31,7 +52,7 @@
       if (!el.name) return;
       if (el.type === 'checkbox') d[el.name] = el.checked;
       else if (el.type === 'radio') { if (el.checked) d[el.name] = el.value; }
-      else d[el.name] = el.value;
+      else if (el.type !== 'file') d[el.name] = el.value;
     });
     return d;
   }
@@ -53,41 +74,57 @@
     else window.prompt('Copy', text);
   }
   function pageUrl(id) { return location.origin + '/' + id; }
+  function logoImg(src, cls) { return src ? '<div class="logo' + (cls ? ' ' + cls : '') + '"><img src="' + esc(src) + '" alt=""></div>' : ''; }
+  function csvDownload(rows, filename) {
+    var q = function (v) { v = String(v == null ? '' : v); return /[",\n;]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    var blob = new Blob(['﻿' + rows.map(function (r) { return r.map(q).join(','); }).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+  }
+  var fileSafe = function (s) { return String(s).replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'list'; };
 
+  // Back office pages use the house look; guest-facing pages wear the organizer's theme.
   function header(kind) {
     var h = '<a class="wordmark" href="/">rsvp<em>.fm</em></a>';
-    if (kind === 'guest') h += '<span class="sc">Guestlist</span>';
-    else if (org) h += '<nav class="nav"><a href="/" data-nav="events">Events</a><a href="/account" data-nav="account">' + esc(org.name) + '</a></nav>';
+    if (kind === 'guest') h += person ? '<nav class="nav"><a href="/me">My invitations</a></nav>' : '<span class="sc">Guestlist</span>';
+    else if (org) h += '<nav class="nav"><a href="/" data-nav="events">Events</a><a href="/community" data-nav="community">Community</a><a href="/account" data-nav="account">Page</a></nav>';
+    else if (person) h += '<nav class="nav"><a href="/me" data-nav="me">My invitations</a></nav>';
     else h += '<nav class="nav"><a href="/login">Log in</a></nav>';
     hdr.innerHTML = h;
+    if (kind !== 'guest') theme('');
   }
   function setNav(name) { Array.prototype.forEach.call(hdr.querySelectorAll('[data-nav]'), function (a) { a.classList.toggle('on', a.getAttribute('data-nav') === name); }); }
   function loading() { main.innerHTML = '<p class="quiet center">Loading…</p>'; }
   function showError(e) { main.innerHTML = '<div class="stack center"><p class="when">' + esc(e.message) + '</p><p><a href="/">Back</a></p></div>'; }
 
-  // ---------- organizers: welcome, sign up, log in ----------
+  // ---------- welcome, sign up, log in ----------
   function viewWelcome() {
     header();
     main.innerHTML = '<div class="stack lg">' +
       '<p class="sc">For promoters, labels &amp; artists</p>' +
       '<h1>The guestlist,<br><em>kept simply.</em></h1>' +
-      '<p class="lead">Create the event, send one link. Your guests leave their name and RSVP; you confirm the list and take it to the door.</p>' +
+      '<p class="lead">Your page, your events, one link each. Your guests leave their name and RSVP; you confirm the list and take it to the door. They can ask to receive your next invitations.</p>' +
       '<div class="acts"><a class="btn" href="/signup">Create an account</a><a class="btn line" href="/login">Log in</a></div>' +
       '<hr class="rule">' +
       '<div class="stack">' +
-      '<div><h2><em>i.</em> Create the event</h2><p class="quiet">A name, a date, a place, a few words. Choose whether guests may bring a +1, +2 or +3.</p></div>' +
-      '<div><h2><em>ii.</em> Share the link</h2><p class="quiet">Guests open it, write their full name and email, and RSVP.</p></div>' +
-      '<div><h2><em>iii.</em> Keep the list</h2><p class="quiet">See every request, confirm one by one or everyone at once, sort by name, copy or export.</p></div>' +
+      '<div><h2><em>i.</em> Your page</h2><p class="quiet">Your logo, a few words, one of six themes. Public, or private: by invitation only.</p></div>' +
+      '<div><h2><em>ii.</em> Your guestlists</h2><p class="quiet">A name, a date, a place. Guests write their full name and email, bring a +1, +2 or +3 if you allow it, and RSVP.</p></div>' +
+      '<div><h2><em>iii.</em> Your community</h2><p class="quiet">Everyone who RSVPs can ask to be kept posted. Next time, they hear from you first.</p></div>' +
       '</div></div>';
+  }
+  function kindSeg(current) {
+    return '<fieldset style="border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:6px"><span class="sc" style="font-size:13px">You are</span><div class="seg">' +
+      ['promoter', 'label', 'artist'].map(function (k) { return '<label><input type="radio" name="kind" value="' + k + '"' + ((current || 'promoter') === k ? ' checked' : '') + '><span>' + KINDS[k] + '</span></label>'; }).join('') +
+      '</div></fieldset>';
   }
   function viewSignup() {
     header();
     main.innerHTML = '<div class="stack lg"><div class="stack"><p class="sc">Organizers</p><h1>Create an account</h1></div>' +
       '<form id="f-signup">' +
       '<label><span>Name guests will see</span><input name="name" maxlength="80" required placeholder="Your label, collective or artist name" autocomplete="organization"></label>' +
-      '<fieldset style="border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:6px"><span class="sc" style="font-size:13px">You are</span><div class="seg">' +
-      ['promoter', 'label', 'artist'].map(function (k, i) { return '<label><input type="radio" name="kind" value="' + k + '"' + (i === 0 ? ' checked' : '') + '><span>' + KINDS[k] + '</span></label>'; }).join('') +
-      '</div></fieldset>' +
+      kindSeg('promoter') +
       '<label><span>Email</span><input name="email" type="email" required autocomplete="email"></label>' +
       '<label><span>Password</span><input name="password" type="password" minlength="8" required autocomplete="new-password"></label>' +
       '<p class="err" id="err" hidden></p><button class="btn wide" type="submit">Create my account</button></form>' +
@@ -95,25 +132,92 @@
   }
   function viewLogin() {
     header();
-    main.innerHTML = '<div class="stack lg"><div class="stack"><p class="sc">Organizers</p><h1>Log in</h1></div>' +
-      '<form id="f-login"><label><span>Email</span><input name="email" type="email" required autocomplete="email"></label>' +
+    var who = new URLSearchParams(location.search).get('as') === 'guest' ? 'guest' : 'org';
+    main.innerHTML = '<div class="stack lg"><div class="stack"><div class="tabs2"><button data-act="loginas" data-id="org" class="' + (who === 'org' ? 'on' : '') + '">Organizer</button><button data-act="loginas" data-id="guest" class="' + (who === 'guest' ? 'on' : '') + '">Guest</button></div><h1 class="center">Log in</h1></div>' +
+      '<form id="f-login" data-as="' + who + '"><label><span>Email</span><input name="email" type="email" required autocomplete="email"></label>' +
       '<label><span>Password</span><input name="password" type="password" required autocomplete="current-password"></label>' +
       '<p class="err" id="err" hidden></p><button class="btn wide" type="submit">Log in</button></form>' +
-      '<p class="quiet small center">New here? <a href="/signup">Create an account</a></p></div>';
+      (who === 'org' ? '<p class="quiet small center">New here? <a href="/signup">Create an organizer account</a></p>' : '<p class="quiet small center">Guests create their password after an RSVP.</p>') + '</div>';
+  }
+
+  // ---------- organizer: page settings ----------
+  function themeGrid(current) {
+    Object.keys(THEMES).forEach(loadFonts);
+    return '<div class="themes">' + Object.keys(THEMES).map(function (k) {
+      var t = THEMES[k];
+      return '<label><input type="radio" name="theme" value="' + k + '"' + (current === k ? ' checked' : '') + '><span class="sw" style="background:' + t.paper + ';color:' + t.ink + ';font-family:' + t.display + ',Georgia,serif"><b>Aa</b><i>' + t.name + '</i></span></label>';
+    }).join('') + '</div>';
   }
   function viewAccount() {
     if (!org) return go('/login', true);
     header(); setNav('account');
-    main.innerHTML = '<div class="stack lg"><h1>Account</h1><form id="f-account">' +
-      '<label><span>Name guests will see</span><input name="name" maxlength="80" required value="' + esc(org.name) + '"></label>' +
-      '<fieldset style="border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:6px"><span class="sc" style="font-size:13px">You are</span><div class="seg">' +
-      ['promoter', 'label', 'artist'].map(function (k) { return '<label><input type="radio" name="kind" value="' + k + '"' + (org.kind === k ? ' checked' : '') + '><span>' + KINDS[k] + '</span></label>'; }).join('') +
-      '</div></fieldset><p class="quiet small">' + esc(org.email) + '</p>' +
+    var inv = location.origin + '/' + org.handle + '?i=' + org.invite_token;
+    main.innerHTML = '<div class="stack lg"><div class="toolbar"><h1>Your page</h1><a class="btn small line" href="/' + esc(org.handle) + '">View</a></div>' +
+      '<div class="stack"><span class="sc">Logo</span><div class="box" style="align-items:center;background:' + (THEMES[org.theme] || THEMES.creme).paper + ';color:' + (THEMES[org.theme] || THEMES.creme).ink + '">' + (org.logo ? logoImg(org.logo) : '<p class="quiet small">No logo yet. A square or wide mark on a transparent background looks best.</p>') +
+      '<div class="acts"><label class="btn small line" style="flex-direction:row;cursor:pointer">' + (org.logo ? 'Replace' : 'Upload a logo') + '<input type="file" id="up-logo" accept="image/png,image/jpeg,image/webp" hidden></label>' +
+      (org.logo ? '<button class="link small" data-act="rmlogo">Remove</button>' : '') + '</div></div></div>' +
+      '<form id="f-account">' +
+      '<label><span>Address</span><span class="prefix"><em>' + esc(location.host) + '/</em><input name="handle" maxlength="30" required autocapitalize="none" autocomplete="off" value="' + esc(org.handle) + '"></span></label>' +
+      '<label><span>Name</span><input name="name" maxlength="80" required value="' + esc(org.name) + '"></label>' +
+      kindSeg(org.kind) +
+      '<label><span>Bio</span><textarea name="bio" maxlength="600" placeholder="A few words about you, your nights, your music.">' + esc(org.bio) + '</textarea></label>' +
+      '<div class="stack" style="gap:8px"><span class="sc" style="font-size:13px">Theme</span>' + themeGrid(org.theme) + '</div>' +
+      '<div class="stack" style="gap:8px"><span class="sc" style="font-size:13px">Who can see your events</span><div class="seg">' +
+      '<label><input type="radio" name="visibility" value="public"' + (org.visibility !== 'private' ? ' checked' : '') + '><span>Everyone</span></label>' +
+      '<label><input type="radio" name="visibility" value="private"' + (org.visibility === 'private' ? ' checked' : '') + '><span>By invitation</span></label></div>' +
+      '<p class="quiet small">By invitation: visitors see your name, logo and bio, and can request an invitation. People you accept, people who RSVP\'d to one of your events, and people with your invitation link see your events.</p></div>' +
       '<p class="err" id="err" hidden></p><button class="btn" type="submit">Save</button></form>' +
-      '<hr class="rule"><p><button class="link" data-act="logout">Log out</button></p></div>';
+      '<div class="box"><span class="sc">Invitation link to your page</span><span class="linkline">' + esc(inv.replace(/^https?:\/\//, '')) + '</span>' +
+      '<p class="quiet small">Whoever opens it can see your events and join your community, even when your page is by invitation.</p>' +
+      '<div class="acts"><button class="btn small" data-act="copylink" data-id="' + esc(inv) + '">Copy link</button><button class="link small" data-act="newinvite">Make a new link</button></div></div>' +
+      '<hr class="rule"><p class="quiet small">' + esc(org.email) + ' · <button class="link small" data-act="logout">Log out</button></p></div>';
+  }
+  // Logos keep their shape and transparency; resized in the browser.
+  function prepareLogo(file) {
+    return new Promise(function (resolve, reject) {
+      var img = new Image(), url = URL.createObjectURL(file);
+      img.onload = function () {
+        var max = 640, s = Math.min(1, max / Math.max(img.width, img.height));
+        var c = document.createElement('canvas'); c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        var out = c.toDataURL('image/png');
+        if (out.length > 1100000) { out = c.toDataURL('image/webp', 0.9); if (!/^data:image\/webp/.test(out) || out.length > 1100000) out = c.toDataURL('image/jpeg', 0.88); }
+        resolve(out);
+      };
+      img.onerror = function () { reject(new Error('This file could not be read as an image.')); };
+      img.src = url;
+    });
   }
 
-  // ---------- organizers: events ----------
+  // ---------- organizer: community ----------
+  function viewCommunity() {
+    if (!org) return go('/login', true);
+    header(); setNav('community'); loading();
+    api('GET', '/community').then(function (j) {
+      viewCommunity.list = j.contacts;
+      var req = j.contacts.filter(function (c) { return c.status === 'requested'; });
+      var mem = j.contacts.filter(function (c) { return c.status === 'member'; });
+      var h = '<div class="stack lg"><h1>Community</h1>' +
+        '<div class="stats"><div class="stat"><b>' + mem.length + '</b><span>Members</span></div><div class="stat"><b>' + mem.filter(function (c) { return c.consent; }).length + '</b><span>Keep me posted</span></div>' +
+        '<div class="stat"><b>' + req.length + '</b><span>Requests</span></div></div>';
+      if (req.length) {
+        h += '<div class="stack"><h3>Invitation requests</h3><div class="list">' + req.map(function (c) {
+          return '<div class="guest"><span class="n">' + esc(c.name || c.email) + '</span><span class="s"><button class="btn small" data-act="member" data-id="' + c.id + '" data-to="member">Accept</button><button class="link small" data-act="member" data-id="' + c.id + '" data-to="declined">Decline</button></span>' +
+            '<span class="e">' + esc(c.email) + (c.note ? ' · ' + esc(c.note) : '') + '</span></div>';
+        }).join('') + '</div></div>';
+      }
+      h += '<div class="stack"><h3>Members</h3>';
+      if (!mem.length) h += '<p class="quiet">Everyone who RSVPs to your events, or asks to be kept posted on your page, appears here.</p>';
+      else h += '<div class="list">' + mem.map(function (c) {
+        return '<div class="guest"><span class="n">' + esc(c.name || c.email) + '</span><span class="s">' + (c.consent ? '<span class="tag confirmed" title="Agreed to receive your next invitations">Keep me posted</span>' : '') + '</span>' +
+          '<span class="e">' + esc(c.email) + (c.has_account ? ' · on rsvp.fm' : '') + (c.source ? ' · ' + esc(c.source) : '') + '</span></div>';
+      }).join('') + '</div><div class="acts"><button class="btn small line" data-act="commcsv">Export CSV</button></div>';
+      main.innerHTML = h + '</div></div>';
+    }).catch(showError);
+  }
+
+  // ---------- organizer: events ----------
   function viewEvents() {
     header(); setNav('events'); loading();
     api('GET', '/events').then(function (j) {
@@ -126,6 +230,7 @@
             '<span class="m">' + (e.requests ? e.requests + (e.requests === 1 ? ' request' : ' requests') + ' · ' + e.people + (e.people === 1 ? ' person' : ' people') + ' · ' + e.confirmed + ' confirmed' : 'No one yet') + (e.open ? '' : ' · closed') + '</span></span></a>';
         }).join('') + '</div>';
       }
+      h += '<p class="quiet small">Your page: <a href="/' + esc(org.handle) + '">' + esc(location.host + '/' + org.handle) + '</a></p>';
       main.innerHTML = h + '</div>';
     }).catch(showError);
   }
@@ -219,39 +324,71 @@
     var c = counts(current.guests);
     return head + '\n\n' + lines.join('\n') + '\n\n' + c.people + (c.people === 1 ? ' person' : ' people') + ' · ' + c.confirmed + ' confirmed';
   }
-  function exportCsv() {
-    var e = current.event;
-    var q = function (v) { v = String(v == null ? '' : v); return /[",\n;]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
-    var rows = [['Name', 'Email', 'Plus ones', 'People', 'Status', 'Requested at']].concat(sorted().map(function (g) {
-      return [g.name, g.email, g.plus, 1 + g.plus, g.status, g.created_at];
-    }));
-    var csv = '﻿' + rows.map(function (r) { return r.map(q).join(','); }).join('\r\n');
-    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = (e.title.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'guestlist') + '-guestlist.csv';
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+
+  // ---------- guests: an organizer's page ----------
+  function joinForm(o, mode, inviteToken) {
+    // mode: 'post' (keep me posted) or 'request' (request an invitation)
+    var p = person;
+    return '<form id="f-join" data-handle="' + esc(o.handle) + '" data-i="' + esc(inviteToken || '') + '">' +
+      (p ? '<p class="quiet center">As ' + esc(p.name) + ' · ' + esc(p.email) + '</p>' :
+        '<label><span>Full name</span><input name="name" maxlength="100" required autocomplete="name"></label>' +
+        '<label><span>Email</span><input name="email" type="email" required autocomplete="email"></label>') +
+      (mode === 'request' ? '<label><span>A word for ' + esc(o.name) + ' (optional)</span><input name="note" maxlength="300" placeholder="Who you know, where we met…"></label>' : '') +
+      '<label class="consent"><input type="checkbox" name="consent" checked><span>I agree that ' + esc(o.name) + ' sends me their next invitations by email.</span></label>' +
+      (p ? '' : '<label><span>Password (optional)</span><input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="To receive invitations here on rsvp.fm"></label>') +
+      '<p class="err" id="err" hidden></p><button class="btn wide" type="submit">' + (mode === 'request' ? 'Request an invitation' : 'Keep me posted') + '</button></form>';
+  }
+  function viewOrg(handle) {
+    loading();
+    var i = new URLSearchParams(location.search).get('i') || '';
+    api('GET', '/o/' + handle + (i ? '?i=' + encodeURIComponent(i) : '')).then(function (j) {
+      var o = j.org;
+      header('guest'); theme(o.theme);
+      document.title = o.name + ' — rsvp.fm';
+      var h = '<div class="stack lg">';
+      if (j.is_owner) h += '<p class="quiet small center">This is your page · <a href="/account">Edit</a></p>';
+      h += '<div class="stack center">' + logoImg(o.logo) + '<h1>' + esc(o.name) + '</h1><p class="sc">' + esc(KINDS[o.kind] || '') + '</p>' + (o.bio ? '<p class="bio">' + esc(o.bio) + '</p>' : '') + '</div>';
+      h += '<p class="ornament">· · ·</p>';
+      if (j.access) {
+        h += '<div class="stack"><h3>Upcoming</h3>';
+        if (j.events.length) h += '<div class="list">' + j.events.map(function (e) {
+          return '<a class="item" href="/' + esc(e.id) + '"><span class="date">' + esc(shortDate(e.starts_at)) + '</span><span class="main"><span class="t">' + esc(e.title) + '</span>' +
+            '<span class="m">' + esc([e.venue, e.city].filter(Boolean).join(', ')) + (e.open ? '' : (e.venue || e.city ? ' · ' : '') + 'list closed') + '</span></span></a>';
+        }).join('') + '</div>';
+        else h += '<p class="quiet">No upcoming events yet.</p>';
+        h += '</div>';
+        if (j.my_status === 'member') h += '<div class="card"><p class="sc">Community</p><h2>You\'re in.</h2><p class="quiet small">' + esc(o.name) + '\'s next invitations land in <a href="/me">My invitations</a>.</p></div>';
+        else if (!j.is_owner) h += '<div class="stack"><h3>Keep me posted</h3><p class="quiet small">Be the first to hear about ' + esc(o.name) + '\'s next guestlists.</p>' + joinForm(o, 'post', i) + '</div>';
+      } else if (j.my_status === 'requested') {
+        h += '<div class="card"><p class="sc">By invitation</p><h2>Your request is in.</h2><p class="quiet small">' + esc(o.name) + ' will let you in. You\'ll find their events in <a href="/me">My invitations</a>.</p></div>';
+      } else {
+        h += '<div class="stack center"><h2><em>By invitation.</em></h2><p class="quiet">' + esc(o.name) + '\'s events are shared with their community. Request an invitation, or wait for an invitation link.</p></div>' +
+          '<div class="stack"><h3>Request an invitation</h3>' + joinForm(o, 'request', '') + '</div>';
+      }
+      main.innerHTML = h + '</div>';
+    }).catch(function (e) { header('guest'); showError(e); });
   }
 
   // ---------- guests: the event page ----------
   function tokenFor(id) { var t = new URLSearchParams(location.search).get('t'); if (t) return t; try { return localStorage.getItem('gl:' + id) || ''; } catch (e) { return ''; } }
   function viewGuest(id) {
-    header('guest'); loading();
+    loading();
     var t = tokenFor(id);
     api('GET', '/p/' + id + (t ? '?t=' + encodeURIComponent(t) : '')).then(function (j) {
-      var e = j.event, h = '<div class="stack lg">';
-      document.title = e.title + ' — Guestlist';
-      h += '<div class="stack center"><p class="sc">' + esc(e.host.name) + ' invites you</p><h1>' + esc(e.title) + '</h1>' +
+      var e = j.event, host = e.host, h = '<div class="stack lg">';
+      header('guest'); theme(host.theme);
+      document.title = e.title + ' — ' + host.name;
+      h += '<div class="stack center">' + (host.logo ? '<a href="/' + esc(host.handle) + '" style="text-decoration:none">' + logoImg(host.logo, 'mark') + '</a>' : '') +
+        '<p class="sc"><a href="/' + esc(host.handle) + '" style="text-decoration:none">' + esc(host.name) + '</a> invites you</p><h1>' + esc(e.title) + '</h1>' +
         (e.starts_at ? '<p class="when">' + esc(whenLine(e)) + '</p>' : '') +
         ([e.venue, e.city].filter(Boolean).length ? '<p class="quiet">' + esc([e.venue, e.city].filter(Boolean).join(', ')) + '</p>' : '') + '</div>';
       h += '<p class="ornament">· · ·</p>';
       if (e.details) h += '<p class="details">' + esc(e.details) + '</p><hr class="rule">';
-      if (j.mine) h += statusCard(e, j.mine, id);
+      if (j.mine) h += statusCard(e, j.mine, id) + afterRsvp(e, j.mine, id);
       else if (!e.open) h += '<div class="card"><h2>The guestlist is closed.</h2><p class="quiet">Thank you for your interest.</p></div>';
-      else h += rsvpForm(e, {});
+      else h += rsvpForm(e, person || {});
       main.innerHTML = h + '</div>';
-    }).catch(showError);
+    }).catch(function (e) { header('guest'); showError(e); });
   }
   function rsvpForm(e, v) {
     var opts = '';
@@ -261,6 +398,7 @@
       '<label><span>Full name</span><input name="name" maxlength="100" required autocomplete="name" value="' + esc(v.name || '') + '"></label>' +
       '<label><span>Email</span><input name="email" type="email" required autocomplete="email" value="' + esc(v.email || '') + '"></label>' +
       (e.plus_max ? '<label><span>Coming</span><select name="plus">' + opts + '</select></label>' : '') +
+      '<label class="consent"><input type="checkbox" name="consent"' + (v.consent === false ? '' : ' checked') + '><span>Keep me posted: I agree that ' + esc(e.host.name) + ' sends me their next invitations by email.</span></label>' +
       '<p class="err" id="err" hidden></p><button class="btn wide" type="submit">RSVP</button></form>' +
       '<p class="quiet small center">Your name and email go to ' + esc(e.host.name) + ' only.</p></div>';
   }
@@ -272,6 +410,35 @@
       '<p class="quiet small">' + (ok ? 'See you there.' : no ? esc(e.host.name) + ' could not add you this time.' : esc(e.host.name) + ' will confirm. Come back to this page to see your status.') + '</p>' +
       (!no && e.open ? '<p><button class="link small" data-act="editrsvp" data-id="' + esc(id) + '">Change my RSVP</button></p>' : '') + '</div>';
   }
+  // After the RSVP: receive the next invitations here, with a password.
+  function afterRsvp(e, m, id) {
+    if (person) return '<p class="quiet small center">' + esc(e.host.name) + '\'s next invitations land in <a href="/me">My invitations</a>.</p>';
+    if (m.has_account) return '<p class="quiet small center"><a href="/login?as=guest&amp;next=' + encodeURIComponent('/' + id) + '">Log in</a> to see all your invitations.</p>';
+    return '<div class="box"><span class="sc">Next time</span><h2 style="font-size:24px">Get ' + esc(e.host.name) + '\'s next invitations on rsvp.fm</h2>' +
+      '<p class="quiet small">Choose a password: their next guestlists will be waiting for you here, one tap to RSVP.</p>' +
+      '<form id="f-person" data-id="' + esc(id) + '"><label><span>Password for ' + esc(m.email) + '</span><input name="password" type="password" minlength="8" required autocomplete="new-password"></label>' +
+      '<p class="err" id="err" hidden></p><button class="btn" type="submit">Keep me posted</button></form></div>';
+  }
+
+  // ---------- guests: my invitations ----------
+  function viewMe() {
+    if (!person) return go('/login?as=guest', true);
+    header(); setNav('me'); loading();
+    api('GET', '/people/me').then(function (j) {
+      var h = '<div class="stack lg"><div class="stack"><p class="sc">' + esc(j.person.name) + '</p><h1>My invitations</h1></div>';
+      if (j.events.length) h += '<div class="list">' + j.events.map(function (e) {
+        var st = e.my_status === 'confirmed' ? 'On the list' + plusLabel(e.my_plus) : e.my_status === 'requested' ? 'Requested' + plusLabel(e.my_plus) : e.my_status === 'declined' ? 'Not this time' : 'Invitation';
+        return '<a class="item" href="/' + esc(e.id) + '"><span class="date">' + esc(shortDate(e.starts_at)) + '</span><span class="main"><span class="t">' + esc(e.title) + '</span>' +
+          '<span class="m">' + esc(e.host.name) + ' · ' + esc(st) + '</span></span></a>';
+      }).join('') + '</div>';
+      else h += '<p class="quiet">No invitations right now. They will appear here as soon as the pages you follow open a guestlist.</p>';
+      if (j.pages.length) h += '<div class="stack"><h3>Pages</h3><div class="list">' + j.pages.map(function (o) {
+        return '<a class="item" href="/' + esc(o.handle) + '"><span class="main"><span class="t">' + esc(o.name) + '</span><span class="m">' + esc(KINDS[o.kind] || '') + (o.my_status === 'requested' ? ' · invitation requested' : '') + '</span></span></a>';
+      }).join('') + '</div></div>';
+      h += '<hr class="rule"><p class="quiet small">' + esc(j.person.email) + ' · <button class="link small" data-act="plogout">Log out</button></p>';
+      main.innerHTML = h + '</div>';
+    }).catch(showError);
+  }
 
   // ---------- events ----------
   document.addEventListener('click', function (ev) {
@@ -280,17 +447,29 @@
     var b = ev.target.closest('[data-act]'); if (!b) return;
     var act = b.getAttribute('data-act'), id = b.getAttribute('data-id');
     if (act === 'sort') { current.sort = b.value; renderManage(); return; }
+    if (act === 'loginas') { go('/login' + (id === 'guest' ? '?as=guest' : ''), true); return; }
     if (act === 'copylink') return copy(id, 'Link copied.');
     if (act === 'sharelink') { navigator.share({ title: current.event.title, url: id }).catch(function () {}); return; }
     if (act === 'copytext') return copy(listText(), 'List copied.');
-    if (act === 'csv') return exportCsv();
+    if (act === 'csv') {
+      return csvDownload([['Name', 'Email', 'Plus ones', 'People', 'Status', 'Keep me posted', 'Requested at']].concat(sorted().map(function (g) {
+        return [g.name, g.email, g.plus, 1 + g.plus, g.status, g.consent ? 'yes' : 'no', g.created_at];
+      })), fileSafe(current.event.title) + '-guestlist.csv');
+    }
+    if (act === 'commcsv') {
+      return csvDownload([['Name', 'Email', 'Status', 'Keep me posted', 'On rsvp.fm', 'Source', 'Since']].concat((viewCommunity.list || []).map(function (c) {
+        return [c.name, c.email, c.status, c.consent ? 'yes' : 'no', c.has_account ? 'yes' : 'no', c.source, c.created_at];
+      })), fileSafe(org.name) + '-community.csv');
+    }
     if (act === 'editrsvp') {
       api('GET', '/p/' + id + '?t=' + encodeURIComponent(tokenFor(id))).then(function (j) {
         var card = main.querySelector('.card'); if (card) card.outerHTML = rsvpForm(j.event, j.mine || {});
+        var box = main.querySelector('#f-person'); if (box) box.closest('.box').remove();
       });
       return;
     }
     if (act === 'logout') { api('POST', '/logout').then(function () { org = null; go('/', true); }); return; }
+    if (act === 'plogout') { api('POST', '/people/logout').then(function () { person = null; go('/', true); }); return; }
     b.disabled = true;
     var done = function () { b.disabled = false; };
     if (act === 'status') {
@@ -299,6 +478,8 @@
         current.guests.forEach(function (g) { if (String(g.id) === id) g.status = to; });
         renderManage();
       }).catch(function (e) { say(e.message); done(); });
+    } else if (act === 'member') {
+      api('PATCH', '/community/' + id, { status: b.getAttribute('data-to') }).then(function (r) { say(r.status === 'member' ? 'Accepted.' : 'Declined.'); viewCommunity(); }).catch(function (e) { say(e.message); done(); });
     } else if (act === 'confirmall') {
       api('POST', '/events/' + current.event.id + '/confirm-all').then(function (r) {
         current.guests.forEach(function (g) { if (g.status === 'requested') g.status = 'confirmed'; });
@@ -309,22 +490,38 @@
       api('POST', '/events/' + current.event.id + '/open', { open: open }).then(function () {
         current.event.open = open; renderManage(); say(open ? 'Guestlist reopened.' : 'Guestlist closed.');
       }).catch(function (e) { say(e.message); done(); });
+    } else if (act === 'rmlogo') {
+      api('DELETE', '/me/logo').then(function () { org.logo = ''; viewAccount(); }).catch(function (e) { say(e.message); done(); });
+    } else if (act === 'newinvite') {
+      api('POST', '/me/invite-link').then(function (r) { org.invite_token = r.invite_token; say('New link. The old one no longer works.'); viewAccount(); }).catch(function (e) { say(e.message); done(); });
     } else if (act === 'delevent') {
       if (b.getAttribute('data-confirm') !== '1') { b.setAttribute('data-confirm', '1'); b.textContent = 'Tap again to delete it for good'; return done(); }
       api('DELETE', '/events/' + id).then(function () { say('Deleted.'); go('/', true); }).catch(function (e) { say(e.message); done(); });
     }
   });
+  document.addEventListener('change', function (ev) {
+    if (ev.target.id !== 'up-logo' || !ev.target.files[0]) return;
+    say('Uploading…');
+    prepareLogo(ev.target.files[0]).then(function (data) { return api('POST', '/me/logo', { data: data }); })
+      .then(function (r) { org.logo = r.logo; say('Logo updated.'); viewAccount(); })
+      .catch(function (e) { say(e.message); });
+  });
   document.addEventListener('submit', function (ev) {
     var f = ev.target; ev.preventDefault();
-    var err = document.getElementById('err'), btn = f.querySelector('[type=submit]');
+    var err = f.querySelector('.err'), btn = f.querySelector('[type=submit]');
     var fail = function (e) { if (err) { err.textContent = e.message; err.hidden = false; } else say(e.message); if (btn) btn.disabled = false; };
     if (err) err.hidden = true;
     if (btn) btn.disabled = true;
     var d = formData(f);
     var next = new URLSearchParams(location.search).get('next');
-    if (f.id === 'f-signup' || f.id === 'f-login') {
-      api('POST', f.id === 'f-signup' ? '/signup' : '/login', d).then(function (j) {
-        org = j.org; go(next && /^\/[^/]/.test(next) ? next : '/', true);
+    var safeNext = next && /^\/[^/]/.test(next) ? next : '';
+    if (f.id === 'f-signup') {
+      api('POST', '/signup', d).then(function (j) { org = j.org; go('/account', true); say('Welcome. Set up your page.'); }).catch(fail);
+    } else if (f.id === 'f-login') {
+      var asGuest = f.getAttribute('data-as') === 'guest';
+      api('POST', asGuest ? '/people/login' : '/login', d).then(function (j) {
+        if (asGuest) person = j.person; else org = j.org;
+        go(safeNext || (asGuest ? '/me' : '/'), true);
       }).catch(fail);
     } else if (f.id === 'f-account') {
       api('PATCH', '/me', d).then(function (j) { org = j.org; say('Saved.'); viewAccount(); }).catch(fail);
@@ -340,22 +537,40 @@
         history.replaceState({}, '', '/' + gid + '?t=' + encodeURIComponent(r.token));
         viewGuest(gid);
       }).catch(fail);
+    } else if (f.id === 'f-person') {
+      var pid = f.getAttribute('data-id');
+      api('POST', '/people/signup', { event: pid, t: tokenFor(pid), password: d.password }).then(function (j) {
+        person = j.person; say('Done. Your next invitations will be waiting here.'); viewGuest(pid);
+      }).catch(fail);
+    } else if (f.id === 'f-join') {
+      d.i = f.getAttribute('data-i');
+      api('POST', '/o/' + f.getAttribute('data-handle') + '/join', d).then(function (r) {
+        if (r.person) person = r.person;
+        say(r.status === 'member' ? 'You\'re in.' : 'Request sent.'); route();
+      }).catch(fail);
     }
   });
 
   // ---------- routing ----------
   function route() {
     var p = location.pathname.replace(/\/+$/, '') || '/', m;
-    if (p === '/') return org ? viewEvents() : viewWelcome();
-    if (p === '/login') return org ? go('/', true) : viewLogin();
+    if (p === '/') return org ? viewEvents() : person ? viewMe() : viewWelcome();
+    if (p === '/login') return viewLogin();
     if (p === '/signup') return org ? go('/', true) : viewSignup();
     if (p === '/account') return viewAccount();
+    if (p === '/community') return viewCommunity();
+    if (p === '/me') return viewMe();
     if (p === '/new') return viewNew();
     if ((m = /^\/e\/([a-z0-9]{4,16})$/.exec(p))) return viewManage(m[1]);
     if ((m = /^\/e\/([a-z0-9]{4,16})\/edit$/.exec(p))) return viewEdit(m[1]);
-    if ((m = /^\/([a-z0-9]{4,16})$/.exec(p))) return viewGuest(m[1]);
+    if ((m = /^\/([a-z0-9][a-z0-9_-]{1,29})$/i.exec(p))) {
+      var slug = m[1].toLowerCase();
+      loading();
+      return api('GET', '/resolve/' + slug).then(function (r) { return r.type === 'event' ? viewGuest(slug) : viewOrg(slug); })
+        .catch(function (e) { header('guest'); showError(e); });
+    }
     header(); main.innerHTML = '<div class="stack center"><p class="when">Nothing here.</p><p><a href="/">Back</a></p></div>';
   }
   window.addEventListener('popstate', route);
-  api('GET', '/session').then(function (j) { org = j.org; }).catch(function () {}).then(route);
+  api('GET', '/session').then(function (j) { org = j.org; person = j.person; }).catch(function () {}).then(route);
 })();
