@@ -9,6 +9,7 @@
   var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   // Six themes for organizer pages: colors and type. Fonts load when a theme is shown.
   var THEMES = {
+    minimal: { name: 'Minimal', paper: '#000000', ink: '#F2F2F2', accent: '#B6FF5C', d: 'Helvetica', t: 'Share Tech Mono' },
     terminal: { name: 'Terminal', paper: '#0A0A0A', ink: '#E6E6E6', accent: '#3DDC84', d: 'JetBrains Mono', t: 'JetBrains Mono' },
     phosphor: { name: 'Phosphor', paper: '#030803', ink: '#8CFF9E', accent: '#D4FF5C', d: 'IBM Plex Mono', t: 'IBM Plex Mono' },
     amber: { name: 'Amber', paper: '#0D0A04', ink: '#FFB347', accent: '#FFD9A0', d: 'Space Mono', t: 'Space Mono' },
@@ -16,9 +17,11 @@
     solarized: { name: 'Solarized', paper: '#002B36', ink: '#EEE8D5', accent: '#B58900', d: 'Source Code Pro', t: 'Source Code Pro' },
     nocturne: { name: 'Nocturne', paper: '#0B0B12', ink: '#E4DFF5', accent: '#A68BFF', d: 'Instrument Serif', t: 'IBM Plex Mono' }
   };
-  var DEFAULT_THEME = 'terminal';
+  var DEFAULT_THEME = 'minimal';
   // Fonts for themes and custom themes (loaded from Google Fonts when shown)
   var FONTS = {
+    'Helvetica': { system: "'Helvetica Neue',Helvetica,Arial,sans-serif" },
+    'Share Tech Mono': { g: 'Share+Tech+Mono', mono: 1 },
     'JetBrains Mono': { g: 'JetBrains+Mono:ital,wght@0,400;0,500;1,400', mono: 1 },
     'IBM Plex Mono': { g: 'IBM+Plex+Mono:ital,wght@0,400;0,500;1,400', mono: 1 },
     'Space Mono': { g: 'Space+Mono:ital,wght@0,400;0,700;1,400', mono: 1 },
@@ -38,10 +41,10 @@
     'Syne': { g: 'Syne:wght@400;500;700' },
     'Archivo': { g: 'Archivo:wght@300;400;500' }
   };
-  function fontStack(name) { var f = FONTS[name] || {}; return "'" + name + "'," + (f.mono ? 'ui-monospace,Menlo,monospace' : f.serif ? 'Georgia,serif' : 'system-ui,sans-serif'); }
+  function fontStack(name) { var f = FONTS[name] || {}; if (f.system) return f.system; return "'" + name + "'," + (f.mono ? 'ui-monospace,Menlo,monospace' : f.serif ? 'Georgia,serif' : 'system-ui,sans-serif'); }
   var loadedFonts = {};
   function loadFont(name) {
-    var f = FONTS[name]; if (!f || loadedFonts[name]) return;
+    var f = FONTS[name]; if (!f || !f.g || loadedFonts[name]) return;
     loadedFonts[name] = 1;
     var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'https://fonts.googleapis.com/css2?family=' + f.g + '&display=swap';
     document.head.appendChild(l);
@@ -361,7 +364,7 @@
     if (!org) return go('/login?next=' + encodeURIComponent('/e/' + id), true);
     header(); setNav('events'); loading();
     api('GET', '/events/' + id).then(function (j) {
-      current = { event: j.event, guests: j.guests, sort: (current && current.sort) || 'arrival' };
+      current = { event: j.event, guests: j.guests, invites: j.invites || [], slots: (current && current.slots) || 1, sort: (current && current.sort) || 'arrival' };
       renderManage();
     }).catch(function (e) { if (e.status === 404) { history.replaceState({}, '', '/' + id); viewGuest(id); } else showError(e); });
   }
@@ -389,6 +392,7 @@
       '<div class="acts"><button class="btn small" data-act="copylink" data-id="' + esc(url) + '">Copy link</button>' +
       (navigator.share ? '<button class="btn small line" data-act="sharelink" data-id="' + esc(url) + '">Share…</button>' : '') +
       '<a class="btn small line" href="/' + esc(e.id) + '" target="_blank" rel="noopener">View page</a></div></div>' +
+      invitesBox() +
       '<div class="stats"><div class="stat"><b>' + c.requests + '</b><span>Requests</span></div><div class="stat"><b>' + c.people + '</b><span>People</span></div>' +
       '<div class="stat"><b>' + c.confirmed + '</b><span>Confirmed</span></div></div>' +
       '<div class="toolbar"><div class="seg" style="min-width:200px"><label><input type="radio" name="sort" value="arrival"' + (current.sort === 'arrival' ? ' checked' : '') + ' data-act="sort"><span>By arrival</span></label>' +
@@ -397,7 +401,8 @@
     if (!current.guests.length) h += '<div class="stack center" style="padding:20px 0"><p class="ornament">· · ·</p><p class="quiet">No one yet. Send the link.</p></div>';
     else {
       h += '<div class="list">' + sorted().map(function (g) {
-        return '<div class="guest ' + g.status + '"><span class="n">' + esc(g.name) + '<span class="plus">' + plusLabel(g.plus) + '</span></span>' +
+        return '<div class="guest ' + g.status + '"><span class="n">' + esc(g.name) + '<span class="plus">' + plusLabel(g.plus) + '</span>' +
+          (g.names && g.names.length ? '<span class="e" style="display:block;font-size:14px">with ' + esc(g.names.join(', ')) + '</span>' : '') + '</span>' +
           '<span class="s">' + (g.status === 'confirmed' ? '<button class="tag confirmed" data-act="status" data-id="' + g.id + '" data-to="requested" title="Tap to undo">Confirmed</button>'
             : g.status === 'declined' ? '<button class="tag declined" data-act="status" data-id="' + g.id + '" data-to="requested" title="Tap to undo">Declined</button>'
             : '<button class="btn small" data-act="status" data-id="' + g.id + '" data-to="confirmed">Confirm</button><button class="link small" data-act="status" data-id="' + g.id + '" data-to="declined">Decline</button>') + '</span>' +
@@ -409,10 +414,31 @@
     h += '<hr class="rule"><div class="acts"><a class="link" href="/e/' + esc(e.id) + '/edit">Edit event</a><button class="link" data-act="toggleopen">' + (e.open ? 'Close the guestlist' : 'Reopen the guestlist') + '</button></div></div>';
     main.innerHTML = h;
   }
+  // Unique links: "you've been invited to register N names on the guestlist"
+  function inviteUrl(code) { return pageUrl(current.event.id) + '?inv=' + code; }
+  function invitesBox() {
+    var h = '<div class="box"><span class="sc">Unique invitation links</span>' +
+      '<p class="quiet small">One link for one guest, who registers up to the number of names you choose. Confirmed right away.</p>' +
+      '<div class="toolbar" style="justify-content:flex-start;gap:14px"><div class="stepper"><button type="button" data-act="slots" data-id="-1" aria-label="Fewer names">−</button>' +
+      '<span><b>' + current.slots + '</b> ' + (current.slots === 1 ? 'name' : 'names') + '</span><button type="button" data-act="slots" data-id="1" aria-label="More names">+</button></div>' +
+      '<input id="inv-label" maxlength="80" placeholder="For whom (optional)" style="flex:1;min-width:140px;font-size:16px"></div>' +
+      '<div><button class="btn small" data-act="newinv">Create the link</button></div>';
+    if (current.invites.length) {
+      h += '<div class="list">' + current.invites.map(function (i) {
+        var url = inviteUrl(i.code);
+        return '<div class="guest"><span class="n" style="font-size:16px">' + (i.label ? esc(i.label) + ' · ' : '') + i.slots + (i.slots === 1 ? ' name' : ' names') + '</span>' +
+          '<span class="s">' + (i.used ? '<span class="tag confirmed">Used</span>' : '<button class="btn small line" data-act="copylink" data-id="' + esc(url) + '">Copy</button>' +
+            (navigator.share ? '<button class="link small" data-act="shareinv" data-id="' + esc(url) + '" data-slots="' + i.slots + '">Share</button>' : '') +
+            '<button class="link small" data-act="delinv" data-id="' + esc(i.code) + '">Delete</button>') + '</span>' +
+          '<span class="e">' + (i.used ? esc(i.guest_name) + (i.names.length ? ' with ' + esc(i.names.join(', ')) : '') : esc(url.replace(/^https?:\/\//, ''))) + '</span></div>';
+      }).join('') + '</div>';
+    }
+    return h + '</div>';
+  }
   function listText() {
     var e = current.event, gs = sorted().filter(function (g) { return g.status !== 'declined'; });
     var head = e.title + (e.starts_at ? ' — ' + longDate(e.starts_at) : '');
-    var lines = gs.map(function (g) { return g.name + plusLabel(g.plus) + (g.status === 'confirmed' ? '' : ' (pending)'); });
+    var lines = gs.map(function (g) { return g.name + plusLabel(g.plus) + (g.names && g.names.length ? ' — ' + g.names.join(', ') : '') + (g.status === 'confirmed' ? '' : ' (pending)'); });
     var c = counts(current.guests);
     return head + '\n\n' + lines.join('\n') + '\n\n' + c.people + (c.people === 1 ? ' person' : ' people') + ' · ' + c.confirmed + ' confirmed';
   }
@@ -463,10 +489,12 @@
 
   // ---------- guests: the event page ----------
   function tokenFor(id) { var t = new URLSearchParams(location.search).get('t'); if (t) return t; try { return localStorage.getItem('gl:' + id) || ''; } catch (e) { return ''; } }
+  function inviteFor(id) { var q = new URLSearchParams(location.search).get('inv'); if (q) { try { sessionStorage.setItem('inv:' + id, q); } catch (e) {} return q; } try { return sessionStorage.getItem('inv:' + id) || ''; } catch (e) { return ''; } }
   function viewGuest(id) {
     loading();
-    var t = tokenFor(id);
-    api('GET', '/p/' + id + (t ? '?t=' + encodeURIComponent(t) : '')).then(function (j) {
+    var t = tokenFor(id), inv = inviteFor(id);
+    var qs = [t ? 't=' + encodeURIComponent(t) : '', inv ? 'inv=' + encodeURIComponent(inv) : ''].filter(Boolean).join('&');
+    api('GET', '/p/' + id + (qs ? '?' + qs : '')).then(function (j) {
       var e = j.event, host = e.host, h = '<div class="stack lg">';
       header('guest'); theme(host.theme, host.custom);
       document.title = e.title + ' — ' + host.name;
@@ -476,11 +504,25 @@
         ([e.venue, e.city].filter(Boolean).length ? '<p class="quiet">' + esc([e.venue, e.city].filter(Boolean).join(', ')) + '</p>' : '') + '</div>';
       h += '<p class="ornament">· · ·</p>';
       if (e.details) h += '<p class="details">' + esc(e.details) + '</p><hr class="rule">';
-      if (j.mine) h += statusCard(e, j.mine, id) + afterRsvp(e, j.mine, id);
+      if (j.invite && !j.invite.mine && j.invite.used) h += '<div class="card"><p class="sc">Invitation</p><h2>This link has already been used.</h2><p class="quiet small">Ask ' + esc(host.name) + ' for a new one.</p></div>';
+      else if (j.invite && !(j.mine && j.mine.invite_code === j.invite.code)) h += inviteForm(e, j.invite, person || j.mine || {});
+      else if (j.mine) h += statusCard(e, j.mine, id) + afterRsvp(e, j.mine, id);
       else if (!e.open) h += '<div class="card"><h2>The guestlist is closed.</h2><p class="quiet">Thank you for your interest.</p></div>';
       else h += rsvpForm(e, person || {});
       main.innerHTML = h + '</div>';
     }).catch(function (e) { header('guest'); showError(e); });
+  }
+  // A unique link: the guest registers up to N names (theirs first)
+  function inviteForm(e, inv, v) {
+    var n = inv.slots, others = v.names || [], rows = '';
+    for (var i = 1; i < n; i++) rows += '<label><span>Name ' + (i + 1) + (i === 1 ? ' (optional)' : '') + '</span><input name="n' + i + '" maxlength="100" autocomplete="off" value="' + esc(others[i - 1] || '') + '"></label>';
+    return '<div class="stack"><div class="card"><p class="sc">Invitation</p><h2>You\'ve been invited to register ' + n + (n === 1 ? ' name' : ' names') + ' on the guestlist.</h2>' +
+      '<p class="quiet small">From ' + esc(e.host.name) + '. Confirmed as soon as you send it.</p></div>' +
+      '<form id="f-rsvp" data-id="' + esc(e.id) + '" data-inv="' + esc(inv.code) + '" data-slots="' + n + '">' +
+      '<label><span>Your full name</span><input name="name" maxlength="100" required autocomplete="name" value="' + esc(v.name || '') + '"></label>' +
+      '<label><span>Your email</span><input name="email" type="email" required autocomplete="email" value="' + esc(v.email || '') + '"></label>' + rows +
+      '<p class="err" hidden></p><button class="btn wide" type="submit">RSVP</button></form>' +
+      '<p class="quiet small center">Names and email go to ' + esc(e.host.name) + ' only.</p></div>';
   }
   function rsvpForm(e, v) {
     var opts = '';
@@ -629,9 +671,15 @@
     if (act === 'copylink') return copy(id, 'Link copied.');
     if (act === 'sharelink') { navigator.share({ title: current.event.title, url: id }).catch(function () {}); return; }
     if (act === 'copytext') return copy(listText(), 'List copied.');
+    if (act === 'slots') { current.slots = Math.max(1, Math.min(20, current.slots + Number(id))); var lb = document.getElementById('inv-label'); var keep = lb ? lb.value : ''; renderManage(); var lb2 = document.getElementById('inv-label'); if (lb2) lb2.value = keep; return; }
+    if (act === 'shareinv') {
+      var n = Number(b.getAttribute('data-slots'));
+      navigator.share({ title: current.event.title, text: 'You\'ve been invited to register ' + n + (n === 1 ? ' name' : ' names') + ' on the guestlist of ' + current.event.title + '.', url: id }).catch(function () {});
+      return;
+    }
     if (act === 'csv') {
-      return csvDownload([['Name', 'Email', 'Plus ones', 'People', 'Status', 'Keep me posted', 'Requested at']].concat(sorted().map(function (g) {
-        return [g.name, g.email, g.plus, 1 + g.plus, g.status, g.consent ? 'yes' : 'no', g.created_at];
+      return csvDownload([['Name', 'Email', 'Plus ones', 'People', 'Other names', 'Status', 'Keep me posted', 'Requested at']].concat(sorted().map(function (g) {
+        return [g.name, g.email, g.plus, 1 + g.plus, (g.names || []).join('; '), g.status, g.consent ? 'yes' : 'no', g.created_at];
       })), fileSafe(current.event.title) + '-guestlist.csv');
     }
     if (act === 'commcsv') {
@@ -641,7 +689,8 @@
     }
     if (act === 'editrsvp') {
       api('GET', '/p/' + id + '?t=' + encodeURIComponent(tokenFor(id))).then(function (j) {
-        var card = main.querySelector('.card'); if (card) card.outerHTML = rsvpForm(j.event, j.mine || {});
+        var card = main.querySelector('.card');
+        if (card) card.outerHTML = j.mine && j.mine.invite_code ? inviteForm(j.event, { code: j.mine.invite_code, slots: (j.invite && j.invite.slots) || (j.mine.names.length + 1) }, j.mine) : rsvpForm(j.event, j.mine || {});
         var box = main.querySelector('#f-person'); if (box) box.closest('.box').remove();
       });
       return;
@@ -669,6 +718,16 @@
       }).catch(function (e) { say(e.message); done(); });
     } else if (act === 'member') {
       api('PATCH', '/community/' + id, { status: b.getAttribute('data-to') }).then(function (r) { say(r.status === 'member' ? 'Accepted.' : 'Declined.'); viewCommunity(); }).catch(function (e) { say(e.message); done(); });
+    } else if (act === 'newinv') {
+      var lab = (document.getElementById('inv-label') || {}).value || '';
+      api('POST', '/events/' + current.event.id + '/invites', { slots: current.slots, label: lab }).then(function (r) {
+        current.invites.unshift({ code: r.code, slots: r.slots, label: lab, used: false, names: [] });
+        renderManage(); copy(inviteUrl(r.code), 'Link created and copied.');
+      }).catch(function (e) { say(e.message); done(); });
+    } else if (act === 'delinv') {
+      api('DELETE', '/events/' + current.event.id + '/invites/' + id).then(function () {
+        current.invites = current.invites.filter(function (i) { return i.code !== id; }); renderManage(); say('Link deleted.');
+      }).catch(function (e) { say(e.message); done(); });
     } else if (act === 'confirmall') {
       api('POST', '/events/' + current.event.id + '/confirm-all').then(function (r) {
         current.guests.forEach(function (g) { if (g.status === 'requested') g.status = 'confirmed'; });
@@ -728,6 +787,10 @@
     } else if (f.id === 'f-rsvp') {
       var gid = f.getAttribute('data-id');
       d.plus = Number(d.plus || 0);
+      if (f.getAttribute('data-inv')) {
+        d.inv = f.getAttribute('data-inv'); d.t = tokenFor(gid) || undefined; d.names = [];
+        for (var k = 1; k < Number(f.getAttribute('data-slots')); k++) if (d['n' + k]) d.names.push(d['n' + k]);
+      }
       api('POST', '/p/' + gid + '/rsvp', d).then(function (r) {
         try { localStorage.setItem('gl:' + gid, r.token); } catch (e) {}
         history.replaceState({}, '', '/' + gid + '?t=' + encodeURIComponent(r.token));

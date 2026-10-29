@@ -10,10 +10,10 @@ import { vapidKeys, validSubscription, pushTo } from './gl-push.js';
 
 const SESSION_DAYS = 60;
 const KINDS = ['promoter', 'label', 'artist', 'club'];
-const THEMES = ['terminal', 'phosphor', 'amber', 'graphite', 'solarized', 'nocturne'];
-const DEFAULT_THEME = 'terminal';
+const THEMES = ['minimal', 'terminal', 'phosphor', 'amber', 'graphite', 'solarized', 'nocturne'];
+const DEFAULT_THEME = 'minimal';
 // Fonts allowed in a custom theme (the app loads them from Google Fonts)
-const FONTS = ['JetBrains Mono', 'IBM Plex Mono', 'Space Mono', 'Fira Code', 'Source Code Pro', 'DM Mono', 'Instrument Serif', 'Cormorant Garamond',
+const FONTS = ['Helvetica', 'Share Tech Mono', 'JetBrains Mono', 'IBM Plex Mono', 'Space Mono', 'Fira Code', 'Source Code Pro', 'DM Mono', 'Instrument Serif', 'Cormorant Garamond',
   'EB Garamond', 'Playfair Display', 'Fraunces', 'Bodoni Moda', 'Libre Caslon Text', 'Inter', 'Jost', 'Space Grotesk', 'Syne', 'Archivo'];
 const HEX_RE = /^#[0-9a-f]{6}$/i;
 function customOf(o) {
@@ -121,6 +121,10 @@ async function ensureSchema(env) {
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_prefs (email TEXT PRIMARY KEY, token TEXT NOT NULL, digest TEXT NOT NULL DEFAULT 'daily',
       updated_at TEXT NOT NULL DEFAULT (datetime('now')))`),
     env.DB.prepare('CREATE TABLE IF NOT EXISTS gl_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)'),
+    // Unique links: "you've been invited to register N names on the guestlist", one use each
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_invites (code TEXT PRIMARY KEY, event_id TEXT NOT NULL REFERENCES gl_events(id) ON DELETE CASCADE,
+      slots INTEGER NOT NULL DEFAULT 1, label TEXT NOT NULL DEFAULT '', guest_id INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS gl_invites_event ON gl_invites(event_id)'),
     // Push subscriptions (one per device), by email
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_push (endpoint TEXT PRIMARY KEY, email TEXT NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
@@ -134,7 +138,7 @@ async function ensureSchema(env) {
     ['theme', "TEXT NOT NULL DEFAULT 'creme'"], ['visibility', "TEXT NOT NULL DEFAULT 'public'"], ['invite_token', 'TEXT'],
     ['custom_theme', "TEXT NOT NULL DEFAULT ''"], ['v1_user_id', 'INTEGER']
   ]);
-  await addColumns(env, 'gl_guests', [['consent', 'INTEGER NOT NULL DEFAULT 0']]);
+  await addColumns(env, 'gl_guests', [['consent', 'INTEGER NOT NULL DEFAULT 0'], ['names', "TEXT NOT NULL DEFAULT ''"], ['invite_code', 'TEXT']]);
   await addColumns(env, 'gl_events', [['listed', 'INTEGER NOT NULL DEFAULT 1']]);
   await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS gl_orgs_handle ON gl_orgs(handle)').run();
   // guests who RSVP'd before communities existed join their organizer's community (no email consent)
@@ -221,7 +225,9 @@ const eventShape = (e) => ({
   id: e.id, title: e.title, starts_at: e.starts_at, ends_at: e.ends_at, venue: e.venue, city: e.city, details: e.details,
   plus_max: e.plus_max, auto_confirm: !!e.auto_confirm, open: !!e.open, listed: e.listed == null ? true : !!e.listed, created_at: e.created_at
 });
-const guestShape = (g) => ({ id: g.id, name: g.name, email: g.email, plus: g.plus, status: g.status, consent: !!g.consent, created_at: g.created_at, updated_at: g.updated_at });
+const guestShape = (g) => ({ id: g.id, name: g.name, email: g.email, plus: g.plus, names: namesOf(g), invite_code: g.invite_code || '', status: g.status, consent: !!g.consent, created_at: g.created_at, updated_at: g.updated_at });
+// Extra names registered through a unique link (one per line)
+const namesOf = (g) => String(g.names || '').split('\n').map((x) => x.trim()).filter(Boolean);
 const UPCOMING = `(e.starts_at = '' OR e.starts_at >= strftime('%Y-%m-%dT%H:%M', 'now', '-1 day'))`;
 
 // "You're on the list": by email and on their devices
@@ -458,7 +464,10 @@ async function api(request, env, url, ctx) {
     const e = await ownEvent(env, org, seg[1]);
     if (seg.length === 2 && method === 'GET') {
       const guests = (await env.DB.prepare('SELECT * FROM gl_guests WHERE event_id = ? ORDER BY created_at, id').bind(e.id).all()).results;
-      return json({ event: eventShape(e), guests: guests.map(guestShape) });
+      const invites = (await env.DB.prepare(`SELECT i.*, g.name AS guest_name, g.names AS guest_names FROM gl_invites i LEFT JOIN gl_guests g ON g.id = i.guest_id
+        WHERE i.event_id = ? ORDER BY i.created_at DESC`).bind(e.id).all()).results;
+      return json({ event: eventShape(e), guests: guests.map(guestShape),
+        invites: invites.map((i) => ({ code: i.code, slots: i.slots, label: i.label, used: !!i.guest_id, guest_name: i.guest_name || '', names: namesOf({ names: i.guest_names }), created_at: i.created_at })) });
     }
     if (seg.length === 2 && method === 'PATCH') {
       const f = eventFields(await body(request));
@@ -475,6 +484,18 @@ async function api(request, env, url, ctx) {
       const b = await body(request);
       await env.DB.prepare('UPDATE gl_events SET open = ? WHERE id = ?').bind(b.open ? 1 : 0, e.id).run();
       return json({ open: !!b.open });
+    }
+    if (seg[2] === 'invites' && !seg[3] && method === 'POST') {
+      const b = await body(request);
+      const slots = Math.max(1, Math.min(20, Math.round(Number(b.slots) || 1)));
+      const c = code(10);
+      await env.DB.prepare('INSERT INTO gl_invites (code, event_id, slots, label) VALUES (?, ?, ?, ?)').bind(c, e.id, slots, str(b.label, 80)).run();
+      return json({ code: c, slots }, 201);
+    }
+    if (seg[2] === 'invites' && seg[3] && method === 'DELETE') {
+      const r = await env.DB.prepare('DELETE FROM gl_invites WHERE code = ? AND event_id = ? AND guest_id IS NULL').bind(seg[3], e.id).run();
+      if (!r.meta.changes) fail(409, 'This link has already been used: remove the guest from the list instead.');
+      return json({ ok: true });
     }
     if (seg[2] === 'confirm-all' && method === 'POST') {
       const waiting = (await env.DB.prepare(`SELECT * FROM gl_guests WHERE event_id = ? AND status = 'requested'`).bind(e.id).all()).results;
@@ -601,9 +622,19 @@ async function api(request, env, url, ctx) {
       const t = url.searchParams.get('t');
       let mine = t ? await env.DB.prepare('SELECT * FROM gl_guests WHERE event_id = ? AND token = ?').bind(e.id, t).first() : null;
       if (!mine && person) mine = await env.DB.prepare('SELECT * FROM gl_guests WHERE event_id = ? AND email = ?').bind(e.id, person.email).first();
+      // A unique link: how many names it may register, and whether it was used (by this browser or someone else)
+      let invite = null;
+      const ic = url.searchParams.get('inv');
+      if (ic) {
+        const iv = await env.DB.prepare('SELECT * FROM gl_invites WHERE code = ? AND event_id = ?').bind(ic, e.id).first();
+        if (!iv) fail(404, 'This invitation link does not exist anymore.');
+        const owner = iv.guest_id ? await env.DB.prepare('SELECT * FROM gl_guests WHERE id = ?').bind(iv.guest_id).first() : null;
+        if (owner && (!mine || mine.id !== owner.id) && t && owner.token === t) mine = owner;
+        invite = { code: iv.code, slots: iv.slots, used: !!iv.guest_id, mine: !!owner && !!mine && owner.id === mine.id };
+      }
       return json({
-        event: shape,
-        mine: mine ? { name: mine.name, email: mine.email, plus: mine.plus, status: mine.status, consent: !!mine.consent, has_account: !!person || !!(await env.DB.prepare('SELECT 1 FROM gl_people WHERE email = ?').bind(mine.email).first()) } : null,
+        event: shape, invite,
+        mine: mine ? { name: mine.name, email: mine.email, plus: mine.plus, names: namesOf(mine), invite_code: mine.invite_code || '', status: mine.status, consent: !!mine.consent, has_account: !!person || !!(await env.DB.prepare('SELECT 1 FROM gl_people WHERE email = ?').bind(mine.email).first()) } : null,
         person: person ? personShape(person) : null
       });
     }
@@ -626,8 +657,36 @@ async function api(request, env, url, ctx) {
       return json({ ok: true, person: created ? personShape(created) : null }, 200, headers);
     }
     if (seg[2] === 'rsvp' && method === 'POST') {
-      if (!e.open) fail(403, 'This guestlist is closed.');
       const b = await body(request);
+      // Through a unique link: N names, confirmed right away, even when the public list is closed.
+      if (b.inv) {
+        const iv = await env.DB.prepare('SELECT * FROM gl_invites WHERE code = ? AND event_id = ?').bind(String(b.inv), e.id).first();
+        if (!iv) fail(404, 'This invitation link does not exist anymore.');
+        const name = str(b.name, 100);
+        const email = str(b.email, 160).toLowerCase();
+        if (name.length < 2) fail(400, 'Enter your full name.');
+        if (!EMAIL_RE.test(email)) fail(400, 'Enter a valid email address.');
+        const names = (Array.isArray(b.names) ? b.names : []).map((x) => str(x, 100)).filter(Boolean).slice(0, iv.slots - 1);
+        let g = iv.guest_id ? await env.DB.prepare('SELECT * FROM gl_guests WHERE id = ?').bind(iv.guest_id).first() : null;
+        if (g && !(b.t && b.t === g.token) && !(person && person.email === g.email)) fail(409, 'This invitation link has already been used.');
+        if (g && g.email !== email && await env.DB.prepare('SELECT 1 FROM gl_guests WHERE event_id = ? AND email = ? AND id != ?').bind(e.id, email, g.id).first()) fail(409, 'That email is already on the list.');
+        if (!g) g = await env.DB.prepare('SELECT * FROM gl_guests WHERE event_id = ? AND email = ?').bind(e.id, email).first();
+        await upsertContact(env, e.org_id, { email, name, status: 'member', source: 'invitation · ' + e.title.slice(0, 60) });
+        let t;
+        if (g) {
+          t = g.token;
+          await env.DB.prepare(`UPDATE gl_guests SET name = ?, email = ?, plus = ?, names = ?, invite_code = ?, status = 'confirmed', updated_at = datetime('now') WHERE id = ?`)
+            .bind(name, email, names.length, names.join('\n'), iv.code, g.id).run();
+        } else {
+          t = token();
+          g = await env.DB.prepare(`INSERT INTO gl_guests (event_id, name, email, plus, names, invite_code, status, token) VALUES (?, ?, ?, ?, ?, ?, 'confirmed', ?) RETURNING *`)
+            .bind(e.id, name, email, names.length, names.join('\n'), iv.code, t).first();
+          await later(mailRsvp(env, { event: e, org: { id: e.org_id, name: e.org_name, handle: e.org_handle }, guest: { name, email, plus: names.length, status: 'confirmed', token: t } }));
+        }
+        await env.DB.prepare('UPDATE gl_invites SET guest_id = ? WHERE code = ?').bind(g.id, iv.code).run();
+        return json({ status: 'confirmed', token: t });
+      }
+      if (!e.open) fail(403, 'This guestlist is closed.');
       const name = str(b.name, 100);
       const email = str(b.email, 160).toLowerCase();
       if (name.length < 2) fail(400, 'Enter your full name.');
