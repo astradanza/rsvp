@@ -5,9 +5,11 @@
 // Own tables (gl_*), own sessions, own static app (public/gl/).
 
 import { mailEnabled, mailRsvp, mailConfirmed, sendDigests, prefsFor } from './gl-mail.js';
+import { migrateV1 } from './gl-migrate.js';
+import { vapidKeys, validSubscription, pushTo } from './gl-push.js';
 
 const SESSION_DAYS = 60;
-const KINDS = ['promoter', 'label', 'artist'];
+const KINDS = ['promoter', 'label', 'artist', 'club'];
 const THEMES = ['terminal', 'phosphor', 'amber', 'graphite', 'solarized', 'nocturne'];
 const DEFAULT_THEME = 'terminal';
 // Fonts allowed in a custom theme (the app loads them from Google Fonts)
@@ -118,6 +120,11 @@ async function ensureSchema(env) {
     // Email preferences per address: daily, weekly or never; the token signs the unsubscribe link
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_prefs (email TEXT PRIMARY KEY, token TEXT NOT NULL, digest TEXT NOT NULL DEFAULT 'daily',
       updated_at TEXT NOT NULL DEFAULT (datetime('now')))`),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS gl_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)'),
+    // Push subscriptions (one per device), by email
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_push (endpoint TEXT PRIMARY KEY, email TEXT NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS gl_push_email ON gl_push(email)'),
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_images (id TEXT PRIMARY KEY,
       org_id INTEGER NOT NULL REFERENCES gl_orgs(id) ON DELETE CASCADE, mime TEXT NOT NULL, data BLOB NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now')))`)
@@ -125,9 +132,10 @@ async function ensureSchema(env) {
   await addColumns(env, 'gl_orgs', [
     ['handle', 'TEXT'], ['bio', "TEXT NOT NULL DEFAULT ''"], ['logo', "TEXT NOT NULL DEFAULT ''"],
     ['theme', "TEXT NOT NULL DEFAULT 'creme'"], ['visibility', "TEXT NOT NULL DEFAULT 'public'"], ['invite_token', 'TEXT'],
-    ['custom_theme', "TEXT NOT NULL DEFAULT ''"]
+    ['custom_theme', "TEXT NOT NULL DEFAULT ''"], ['v1_user_id', 'INTEGER']
   ]);
   await addColumns(env, 'gl_guests', [['consent', 'INTEGER NOT NULL DEFAULT 0']]);
+  await addColumns(env, 'gl_events', [['listed', 'INTEGER NOT NULL DEFAULT 1']]);
   await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS gl_orgs_handle ON gl_orgs(handle)').run();
   // guests who RSVP'd before communities existed join their organizer's community (no email consent)
   if (!(await env.DB.prepare('SELECT 1 FROM gl_contacts LIMIT 1').first())) {
@@ -140,6 +148,8 @@ async function ensureSchema(env) {
     await env.DB.prepare('UPDATE gl_orgs SET handle = COALESCE(handle, ?), invite_token = COALESCE(invite_token, ?) WHERE id = ?')
       .bind(await freeHandle(env, o.name), code(12), o.id).run();
   }
+  // accounts, events and lists of the first rsvp.fm, once
+  await migrateV1(env, { freeHandle, code, token, reserved: RESERVED, handleRe: HANDLE_RE });
   ready = true;
 }
 async function freeHandle(env, name) {
@@ -203,15 +213,23 @@ function eventFields(b) {
     details: (typeof b.details === 'string' ? b.details : '').replace(/\r\n/g, '\n').trim().slice(0, 4000),
     plus_max: Math.max(0, Math.min(3, Math.round(Number(b.plus_max) || 0))),
     auto_confirm: b.auto_confirm ? 1 : 0,
-    open: b.open === false || b.open === 0 || b.open === '0' ? 0 : 1
+    open: b.open === false || b.open === 0 || b.open === '0' ? 0 : 1,
+    listed: b.listed === false || b.listed === 0 || b.listed === '0' ? 0 : 1
   };
 }
 const eventShape = (e) => ({
   id: e.id, title: e.title, starts_at: e.starts_at, ends_at: e.ends_at, venue: e.venue, city: e.city, details: e.details,
-  plus_max: e.plus_max, auto_confirm: !!e.auto_confirm, open: !!e.open, created_at: e.created_at
+  plus_max: e.plus_max, auto_confirm: !!e.auto_confirm, open: !!e.open, listed: e.listed == null ? true : !!e.listed, created_at: e.created_at
 });
 const guestShape = (g) => ({ id: g.id, name: g.name, email: g.email, plus: g.plus, status: g.status, consent: !!g.consent, created_at: g.created_at, updated_at: g.updated_at });
 const UPCOMING = `(e.starts_at = '' OR e.starts_at >= strftime('%Y-%m-%dT%H:%M', 'now', '-1 day'))`;
+
+// "You're on the list": by email and on their devices
+async function notifyConfirmed(env, event, org, guest) {
+  await mailConfirmed(env, { event, org, guest });
+  const m = /^\d{4}-(\d{2})-(\d{2})T(\d{2}:\d{2})/.exec(event.starts_at || '');
+  await pushTo(env, guest.email, { title: "You're on the list", body: event.title + (m ? ` · ${+m[2]}/${+m[1]} ${m[3]}` : ''), url: '/' + event.id + '?t=' + encodeURIComponent(guest.token), tag: 'confirm-' + event.id });
+}
 
 async function ownEvent(env, org, id) {
   const e = await env.DB.prepare('SELECT * FROM gl_events WHERE id = ?').bind(String(id)).first();
@@ -254,6 +272,30 @@ async function api(request, env, url, ctx) {
 
   if (path === '/api/session' && method === 'GET') return json({ org: org ? orgShape(org) : null, person: person ? personShape(person) : null, mail: mailEnabled(env) });
 
+  // --- push notifications ---
+  if (path === '/api/push/key' && method === 'GET') return json({ key: (await vapidKeys(env)).publicKey });
+  if (path === '/api/push/subscribe' && method === 'POST') {
+    const b = await body(request);
+    const sub = b.subscription || {};
+    if (!validSubscription(sub)) fail(400, 'This browser sent an unusable subscription.');
+    // whose device: the guest account, or the guest of an RSVP (event + token)
+    let email = person ? person.email : '';
+    if (!email && b.event && b.t) {
+      const g = await env.DB.prepare('SELECT email FROM gl_guests WHERE event_id = ? AND token = ?').bind(String(b.event), String(b.t)).first();
+      if (g) email = g.email;
+    }
+    if (!email) fail(401, 'Log in first.');
+    await env.DB.prepare(`INSERT INTO gl_push (endpoint, email, p256dh, auth) VALUES (?, ?, ?, ?)
+      ON CONFLICT(endpoint) DO UPDATE SET email = excluded.email, p256dh = excluded.p256dh, auth = excluded.auth`).bind(sub.endpoint, email, sub.keys.p256dh, sub.keys.auth).run();
+    await later(pushTo(env, email, { title: 'Notifications on', body: 'New invitations from the pages you joined will show up here.', url: '/me', tag: 'welcome' }));
+    return json({ ok: true });
+  }
+  if (path === '/api/push/unsubscribe' && method === 'POST') {
+    const b = await body(request);
+    await env.DB.prepare('DELETE FROM gl_push WHERE endpoint = ?').bind(String(b.endpoint || '')).run();
+    return json({ ok: true });
+  }
+
   // --- email preferences (link in every invitation email, or the guest's own session) ---
   if (path === '/api/prefs') {
     let email = person ? person.email : '';
@@ -288,11 +330,21 @@ async function api(request, env, url, ctx) {
       .bind(email, await hashPassword(password), name, KINDS.includes(b.kind) ? b.kind : 'promoter', await freeHandle(env, name), code(12)).first();
     return json({ org: orgShape(o) }, 201, { 'set-cookie': await startSession(env, o.id, url) });
   }
+  // One login for everyone: an organizer (email or handle) first, then a guest account.
   if (path === '/api/login' && method === 'POST') {
     const b = await body(request);
-    const o = await env.DB.prepare('SELECT * FROM gl_orgs WHERE email = ?').bind(str(b.email, 160).toLowerCase()).first();
-    if (!o || !(await verifyPassword(String(b.password || ''), o.password_hash))) fail(401, 'Wrong email or password.');
-    return json({ org: orgShape(o) }, 200, { 'set-cookie': await startSession(env, o.id, url) });
+    const id = str(b.email || b.login, 160).toLowerCase().replace(/^@/, '');
+    const password = String(b.password || '');
+    const o = await env.DB.prepare('SELECT * FROM gl_orgs WHERE email = ? OR handle = ?').bind(id, id).first();
+    if (o && await verifyPassword(password, o.password_hash)) return json({ org: orgShape(o) }, 200, { 'set-cookie': await startSession(env, o.id, url) });
+    const p = await env.DB.prepare('SELECT * FROM gl_people WHERE email = ?').bind(id).first();
+    if (p && await verifyPassword(password, p.password_hash)) return json({ person: personShape(p) }, 200, { 'set-cookie': await startPersonSession(env, p.id, url) });
+    fail(401, 'Wrong email or password.');
+  }
+  // Old personal invite links (rsvp.fm/i/code) lead to the page of whoever sent them
+  if (seg[0] === 'invite' && seg[1] && method === 'GET') {
+    const r = await env.DB.prepare(`SELECT o.handle FROM users u JOIN gl_orgs o ON o.v1_user_id = u.id WHERE u.invite_link = ?`).bind(String(seg[1]).toLowerCase()).first().catch(() => null);
+    return json({ handle: r ? r.handle : null });
   }
   if (path === '/api/logout' && method === 'POST') {
     const t = cookie(request, 'gsid');
@@ -396,9 +448,9 @@ async function api(request, env, url, ctx) {
     let id = code(8);
     while (await env.DB.prepare('SELECT 1 FROM gl_orgs WHERE handle = ?').bind(id).first()) id = code(8);
     await env.DB.prepare(
-      `INSERT INTO gl_events (id, org_id, title, starts_at, ends_at, venue, city, details, plus_max, auto_confirm, open)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(id, org.id, f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open).run();
+      `INSERT INTO gl_events (id, org_id, title, starts_at, ends_at, venue, city, details, plus_max, auto_confirm, open, listed)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, org.id, f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed).run();
     return json({ id }, 201);
   }
   if (seg[0] === 'events' && seg[1]) {
@@ -411,8 +463,8 @@ async function api(request, env, url, ctx) {
     if (seg.length === 2 && method === 'PATCH') {
       const f = eventFields(await body(request));
       await env.DB.prepare(
-        `UPDATE gl_events SET title = ?, starts_at = ?, ends_at = ?, venue = ?, city = ?, details = ?, plus_max = ?, auto_confirm = ?, open = ? WHERE id = ?`
-      ).bind(f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, e.id).run();
+        `UPDATE gl_events SET title = ?, starts_at = ?, ends_at = ?, venue = ?, city = ?, details = ?, plus_max = ?, auto_confirm = ?, open = ?, listed = ? WHERE id = ?`
+      ).bind(f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed, e.id).run();
       return json({ id: e.id });
     }
     if (seg.length === 2 && method === 'DELETE') {
@@ -427,7 +479,7 @@ async function api(request, env, url, ctx) {
     if (seg[2] === 'confirm-all' && method === 'POST') {
       const waiting = (await env.DB.prepare(`SELECT * FROM gl_guests WHERE event_id = ? AND status = 'requested'`).bind(e.id).all()).results;
       const r = await env.DB.prepare(`UPDATE gl_guests SET status = 'confirmed', updated_at = datetime('now') WHERE event_id = ? AND status = 'requested'`).bind(e.id).run();
-      if (waiting.length && mailEnabled(env)) await later((async () => { for (const g of waiting) await mailConfirmed(env, { event: e, org, guest: g }); })());
+      if (waiting.length) await later((async () => { for (const g of waiting) await notifyConfirmed(env, e, org, g); })());
       return json({ confirmed: r.meta.changes || 0, emailed: mailEnabled(env) });
     }
     if (seg[2] === 'guests' && seg[3]) {
@@ -437,7 +489,7 @@ async function api(request, env, url, ctx) {
         const b = await body(request);
         const status = ['requested', 'confirmed', 'declined'].includes(b.status) ? b.status : g.status;
         await env.DB.prepare(`UPDATE gl_guests SET status = ?, updated_at = datetime('now') WHERE id = ?`).bind(status, g.id).run();
-        if (status === 'confirmed' && g.status !== 'confirmed') await later(mailConfirmed(env, { event: e, org, guest: g }));
+        if (status === 'confirmed' && g.status !== 'confirmed') await later(notifyConfirmed(env, e, org, g));
         return json({ status });
       }
       if (method === 'DELETE') {
@@ -485,7 +537,7 @@ async function api(request, env, url, ctx) {
       `SELECT e.*, o.name AS org_name, o.handle AS org_handle, o.logo AS org_logo, g.status AS my_status, g.plus AS my_plus
        FROM gl_events e JOIN gl_orgs o ON o.id = e.org_id
        LEFT JOIN gl_guests g ON g.event_id = e.id AND g.email = ?1
-       WHERE ${UPCOMING} AND (g.id IS NOT NULL OR (e.open = 1 AND e.org_id IN (SELECT org_id FROM gl_contacts WHERE email = ?1 AND status = 'member')))
+       WHERE ${UPCOMING} AND (g.id IS NOT NULL OR (e.open = 1 AND e.listed = 1 AND e.org_id IN (SELECT org_id FROM gl_contacts WHERE email = ?1 AND status = 'member')))
        ORDER BY CASE WHEN e.starts_at = '' THEN 1 ELSE 0 END, e.starts_at LIMIT 60`
     ).bind(person.email).all()).results;
     const pages = (await env.DB.prepare(
@@ -508,7 +560,7 @@ async function api(request, env, url, ctx) {
       if (inviteOk && person && mine !== 'member') { await upsertContact(env, o.id, { email: person.email, name: person.name, status: 'member', consent: true, source: 'invitation link' }); mine = 'member'; }
       const isOwner = !!org && org.id === o.id;
       const access = o.visibility === 'public' || inviteOk || isOwner || mine === 'member';
-      const events = access ? (await env.DB.prepare(`SELECT * FROM gl_events e WHERE e.org_id = ? AND ${UPCOMING} ORDER BY CASE WHEN e.starts_at = '' THEN 1 ELSE 0 END, e.starts_at`).bind(o.id).all()).results.map(eventShape) : [];
+      const events = access ? (await env.DB.prepare(`SELECT * FROM gl_events e WHERE e.org_id = ? AND (e.listed = 1 OR ${isOwner ? 1 : 0}) AND ${UPCOMING} ORDER BY CASE WHEN e.starts_at = '' THEN 1 ELSE 0 END, e.starts_at`).bind(o.id).all()).results.map(eventShape) : [];
       return json({ org: publicOrg(o), access, invited: inviteOk, is_owner: isOwner, my_status: mine, events });
     }
     // Keep me posted (public page or invitation link) / Request an invitation (private page)
@@ -608,8 +660,9 @@ async function api(request, env, url, ctx) {
   fail(404, 'Not found.');
 }
 
+// rsvp.fm and list.rsvp.fm serve the guestlist; old.rsvp.fm keeps the first version readable.
 export function isGuestlistHost(hostname) {
-  return /^(list|guestlist|gl)\./i.test(hostname);
+  return !/^old\./i.test(hostname);
 }
 
 // Daily (cron): email guests their pending invitations
@@ -639,7 +692,8 @@ export async function handleGuestlist(request, env, url, ctx) {
     }
   }
   // Static files live in public/gl/; every other path is the app.
-  const file = /^\/(app\.js|style\.css|favicon\.svg)$/.exec(url.pathname);
+  if (/^\/avatars\/\d+\.webp$/.test(url.pathname)) return env.ASSETS.fetch(request);
+  const file = /^\/(app\.js|style\.css|favicon\.svg|sw\.js|manifest\.webmanifest|icon-192\.png|icon-512\.png|apple-touch-icon\.png|badge-72\.png)$/.exec(url.pathname);
   const target = new URL(file ? '/gl/' + file[1] : '/gl/', url);
   const res = await env.ASSETS.fetch(new Request(target, request));
   if (file) return res;

@@ -1,10 +1,11 @@
 // Emails for the guestlist (list.rsvp.fm), sent with Cloudflare Email Service.
 // Transactional only: an RSVP received, a confirmation, and a digest of pending invitations for guests
 // who chose to join an organizer's page. Nothing is sent until the `EMAIL` send binding exists.
-// Each organizer sends from <handle>@rsvp.fm.
+// Each organizer sends from <handle>@rsvp.fm. Push notifications go out alongside (see gl-push.js).
+import { pushTo } from './gl-push.js';
 
 const MAIL_DOMAIN = 'rsvp.fm';
-const APP = 'https://list.rsvp.fm';
+const APP = 'https://rsvp.fm';
 
 export const mailEnabled = (env) => !!(env && env.EMAIL && typeof env.EMAIL.send === 'function');
 const appUrl = (env) => (env && env.GL_URL) || APP;
@@ -113,24 +114,25 @@ export async function mailConfirmed(env, { event, org, guest }) {
 // For each guest who joined at least one page: new invitations (open upcoming events they haven't answered)
 // and, once, a reminder for invitations still waiting when the event is less than three days away.
 export async function sendDigests(env, { limit = 2000, now = new Date() } = {}) {
-  if (!mailEnabled(env)) return { sent: 0, skipped: 'email off' };
+  const mail = mailEnabled(env);
   const nowLocal = now.toISOString().slice(0, 16);
   const soon = new Date(now.getTime() + 72 * 3600 * 1000).toISOString().slice(0, 16);
   const dayAgo = new Date(now.getTime() - 40 * 3600 * 1000).toISOString().slice(0, 19).replace('T', ' ');
   const rows = (await env.DB.prepare(
-    `SELECT c.email, MAX(c.name) AS name, e.id, e.title, e.starts_at, e.venue, e.city, o.name AS org_name, o.handle AS org_handle, o.id AS org_id,
+    `SELECT c.email, MAX(c.name) AS name, MAX(c.consent) AS consent, COALESCE(MAX(p.digest), 'daily') AS digest,
+       EXISTS(SELECT 1 FROM gl_push s WHERE s.email = c.email) AS has_push, e.id, e.title, e.starts_at, e.venue, e.city, o.name AS org_name, o.handle AS org_handle, o.id AS org_id,
        (SELECT MAX(l.created_at) FROM gl_mail_log l WHERE l.email = c.email AND l.event_id = e.id AND l.kind = 'invite' AND l.status = 'sent') AS invited_at,
        EXISTS(SELECT 1 FROM gl_mail_log l WHERE l.email = c.email AND l.event_id = e.id AND l.kind = 'reminder' AND l.status = 'sent') AS reminded
      FROM gl_contacts c
-     JOIN gl_events e ON e.org_id = c.org_id AND e.open = 1 AND e.starts_at != '' AND e.starts_at >= ?1
+     JOIN gl_events e ON e.org_id = c.org_id AND e.open = 1 AND e.listed = 1 AND e.starts_at != '' AND e.starts_at >= ?1
      JOIN gl_orgs o ON o.id = c.org_id
      LEFT JOIN gl_prefs p ON p.email = c.email
-     WHERE c.status = 'member' AND c.consent = 1 AND COALESCE(p.digest, 'daily') != 'never'
+     WHERE c.status = 'member'
+       AND ((c.consent = 1 AND COALESCE(p.digest, 'daily') != 'never') OR EXISTS(SELECT 1 FROM gl_push s WHERE s.email = c.email))
        AND NOT EXISTS (SELECT 1 FROM gl_guests g WHERE g.event_id = e.id AND g.email = c.email)
      GROUP BY c.email, e.id
      ORDER BY c.email, e.starts_at`
   ).bind(nowLocal).all()).results;
-  const weekly = new Set((await env.DB.prepare("SELECT email FROM gl_prefs WHERE digest = 'weekly'").all()).results.map((r) => r.email));
   const isMonday = now.getUTCDay() === 1;
   const byEmail = new Map();
   for (const r of rows) {
@@ -138,8 +140,10 @@ export async function sendDigests(env, { limit = 2000, now = new Date() } = {}) 
     // one reminder, close to the event, and never the day right after the invitation
     const reminder = !!r.invited_at && !r.reminded && r.starts_at <= soon && r.invited_at <= dayAgo;
     if (!fresh && !reminder) continue;
-    if (weekly.has(r.email) && !isMonday && !reminder) continue;
-    if (!byEmail.has(r.email)) byEmail.set(r.email, { name: r.name, fresh: [], waiting: [] });
+    // email: with consent, as often as they chose; push: whenever they turned it on
+    const canMail = mail && !!r.consent && r.digest !== 'never' && (r.digest !== 'weekly' || isMonday || reminder);
+    if (!canMail && !r.has_push) continue;
+    if (!byEmail.has(r.email)) byEmail.set(r.email, { name: r.name, fresh: [], waiting: [], mail: canMail, push: !!r.has_push });
     byEmail.get(r.email)[fresh ? 'fresh' : 'waiting'].push(r);
   }
   let sent = 0;
@@ -153,7 +157,16 @@ export async function sendDigests(env, { limit = 2000, now = new Date() } = {}) 
     if (d.fresh.length) lines.push(...d.fresh.map(item));
     if (d.waiting.length) { lines.push(`<span style="font-size:12px;letter-spacing:2px;text-transform:uppercase;color:#6E685E">Still waiting for your RSVP</span>`); lines.push(...d.waiting.map(item)); }
     const single = n === 1 ? (d.fresh[0] || d.waiting[0]) : null;
-    const ok = await send(env, {
+    let delivered = false;
+    if (d.push) {
+      const pushed = await pushTo(env, email, {
+        title: d.fresh.length ? (single ? `${single.org_name} invites you` : `${n} invitations waiting`) : 'Still waiting for your RSVP',
+        body: single ? `${single.title}${when(single) ? ' · ' + when(single) : ''}` : orgs.slice(0, 3).join(', '),
+        url: single ? `/${single.id}` : '/me', tag: 'invitations'
+      });
+      if (pushed) delivered = true;
+    }
+    const ok = d.mail && await send(env, {
       to: email, fromHandle: orgs.length === 1 ? (d.fresh[0] || d.waiting[0]).org_handle : 'invitations', fromName: orgs.length === 1 ? orgs[0] : '',
       kind: 'digest', subject: d.fresh.length
         ? (n === 1 ? `${single.org_name} invites you · ${single.title}` : `${n} invitations waiting · ${orgs.slice(0, 3).join(', ')}`)
@@ -168,7 +181,8 @@ export async function sendDigests(env, { limit = 2000, now = new Date() } = {}) 
         footer: `<a href="${esc(prefsLink(env, p))}" style="color:#9C9588">Email settings or unsubscribe</a>`
       }
     });
-    if (!ok) continue;
+    if (ok) delivered = true;
+    if (!delivered) continue;
     sent++;
     const stmts = [];
     for (const r of d.fresh) stmts.push(env.DB.prepare("INSERT INTO gl_mail_log (kind, email, event_id, org_id, status) VALUES ('invite', ?, ?, ?, 'sent')").bind(email, r.id, r.org_id));

@@ -4,7 +4,7 @@
   var main = document.getElementById('main');
   var hdr = document.getElementById('hdr');
   var org = null, person = null, mailOn = false;
-  var KINDS = { promoter: 'Promoter', label: 'Label', artist: 'Artist' };
+  var KINDS = { promoter: 'Promoter', label: 'Label', artist: 'Artist', club: 'Club' };
   var DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   // Six themes for organizer pages: colors and type. Fonts load when a theme is shown.
@@ -162,7 +162,7 @@
   }
   function kindSeg(current) {
     return '<fieldset style="border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:6px"><span class="sc" style="font-size:13px">You are</span><div class="seg">' +
-      ['promoter', 'label', 'artist'].map(function (k) { return '<label><input type="radio" name="kind" value="' + k + '"' + ((current || 'promoter') === k ? ' checked' : '') + '><span>' + KINDS[k] + '</span></label>'; }).join('') +
+      ['promoter', 'label', 'artist', 'club'].map(function (k) { return '<label><input type="radio" name="kind" value="' + k + '"' + ((current || 'promoter') === k ? ' checked' : '') + '><span>' + KINDS[k] + '</span></label>'; }).join('') +
       '</div></fieldset>';
   }
   function viewSignup() {
@@ -178,12 +178,12 @@
   }
   function viewLogin() {
     header();
-    var who = new URLSearchParams(location.search).get('as') === 'guest' ? 'guest' : 'org';
-    main.innerHTML = '<div class="stack lg"><div class="stack"><div class="tabs2"><button data-act="loginas" data-id="org" class="' + (who === 'org' ? 'on' : '') + '">Organizer</button><button data-act="loginas" data-id="guest" class="' + (who === 'guest' ? 'on' : '') + '">Guest</button></div><h1 class="center">Log in</h1></div>' +
-      '<form id="f-login" data-as="' + who + '"><label><span>Email</span><input name="email" type="email" required autocomplete="email"></label>' +
+    main.innerHTML = '<div class="stack lg"><div class="stack"><p class="sc">Organizers &amp; guests</p><h1>Log in</h1></div>' +
+      '<form id="f-login"><label><span>Email or handle</span><input name="email" required autocomplete="username" autocapitalize="none"></label>' +
       '<label><span>Password</span><input name="password" type="password" required autocomplete="current-password"></label>' +
       '<p class="err" id="err" hidden></p><button class="btn wide" type="submit">Log in</button></form>' +
-      (who === 'org' ? '<p class="quiet small center">New here? <a href="/signup">Create an organizer account</a></p>' : '<p class="quiet small center">Guests create their password after an RSVP.</p>') + '</div>';
+      '<p class="quiet small center">Your rsvp.fm account works here: same email, same password.</p>' +
+      '<p class="quiet small center">Promoter, label, artist or club? <a href="/signup">Create an organizer account</a></p></div>';
   }
 
   // ---------- organizer: page settings ----------
@@ -337,6 +337,7 @@
       ['No one', 'A +1', 'Up to +2', 'Up to +3'].map(function (t, i) { return '<option value="' + i + '"' + (pm === i ? ' selected' : '') + '>' + t + '</option>'; }).join('') + '</select></label>' +
       '<label class="check"><input type="checkbox" name="auto_confirm"' + (v.auto_confirm ? ' checked' : '') + '><span>Confirm requests automatically<small>Otherwise every RSVP waits for your confirmation.</small></span></label>' +
       '<label class="check"><input type="checkbox" name="open"' + (v.open === false ? '' : ' checked') + '><span>Guestlist open<small>Close it when you are full: the page stays, the form goes.</small></span></label>' +
+      '<label class="check"><input type="checkbox" name="listed"' + (v.listed === false ? '' : ' checked') + '><span>Show on my page<small>Otherwise only people with the link see it.</small></span></label>' +
       '<p class="err" id="err" hidden></p><div class="acts"><button class="btn" type="submit">' + (id ? 'Save' : 'Create the guestlist') + '</button>' +
       (id ? '<a class="link" href="/e/' + esc(id) + '">Cancel</a>' : '') + '</div></form>';
   }
@@ -362,7 +363,7 @@
     api('GET', '/events/' + id).then(function (j) {
       current = { event: j.event, guests: j.guests, sort: (current && current.sort) || 'arrival' };
       renderManage();
-    }).catch(showError);
+    }).catch(function (e) { if (e.status === 404) { history.replaceState({}, '', '/' + id); viewGuest(id); } else showError(e); });
   }
   function counts(gs) {
     var live = gs.filter(function (g) { return g.status !== 'declined'; });
@@ -448,7 +449,7 @@
         }).join('') + '</div>';
         else h += '<p class="quiet">No upcoming events yet.</p>';
         h += '</div>';
-        if (j.my_status === 'member') h += '<div class="card"><p class="sc">Community</p><h2>You\'re in.</h2><p class="quiet small">' + esc(o.name) + '\'s next invitations land in <a href="/me">My invitations</a>.</p></div>';
+        if (j.my_status === 'member') h += '<div class="card"><p class="sc">Community</p><h2>You\'re in.</h2><p class="quiet small">' + esc(o.name) + '\'s next invitations land in <a href="/me">My invitations</a>.</p></div>' + pushBox({});
         else if (!j.is_owner) h += '<div class="stack"><h3>Keep me posted</h3><p class="quiet small">Be the first to hear about ' + esc(o.name) + '\'s next guestlists.</p>' + joinForm(o, 'post', i) + '</div>';
       } else if (j.my_status === 'requested') {
         h += '<div class="card"><p class="sc">By invitation</p><h2>Your request is in.</h2><p class="quiet small">' + esc(o.name) + ' will let you in. You\'ll find their events in <a href="/me">My invitations</a>.</p></div>';
@@ -505,12 +506,12 @@
   function afterRsvp(e, m, id) {
     var host = esc(e.host.name);
     if (m.consent) {
-      if (person) return '<p class="quiet small center">You\'re in ' + host + '\'s community. Their next invitations land in <a href="/me">My invitations</a>.</p>';
+      if (person) return '<p class="quiet small center">You\'re in ' + host + '\'s community. Their next invitations land in <a href="/me">My invitations</a>.</p>' + pushBox({});
       if (m.has_account) return '<p class="quiet small center">You\'re in ' + host + '\'s community. <a href="/login?as=guest&amp;next=' + encodeURIComponent('/' + id) + '">Log in</a> to see all your invitations.</p>';
       return '<div class="box"><span class="sc">You\'re in ' + host + '\'s community</span>' +
         '<p class="quiet small">Choose a password to find their next invitations here on rsvp.fm, one tap to RSVP.</p>' +
         '<form id="f-person" data-id="' + esc(id) + '"><label><span>Password for ' + esc(m.email) + '</span><input name="password" type="password" minlength="8" required autocomplete="new-password"></label>' +
-        '<p class="err" hidden></p><button class="btn" type="submit">Create my account</button></form></div>';
+        '<p class="err" hidden></p><button class="btn" type="submit">Create my account</button></form></div>' + pushBox({ event: id, t: tokenFor(id) });
     }
     var withPassword = !person && !m.has_account;
     return '<div class="box"><span class="sc">Next time</span><h2 style="font-size:24px">Join ' + host + '\'s page</h2>' +
@@ -519,6 +520,59 @@
       (withPassword ? '<label><span>Password (optional)</span><input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="To find them here on rsvp.fm"></label>' : '') +
       '<p class="err" hidden></p><button class="btn" type="submit">Join ' + host + '</button>' +
       '<p class="quiet small">By joining, you agree that ' + host + ' emails you their next invitations.</p></form></div>';
+  }
+
+  // ---------- push notifications (no app: the browser, or rsvp.fm on the iPhone home screen) ----------
+  var isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  var standalone = window.navigator.standalone === true || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+  var pushSupported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  var swReady = pushSupported ? navigator.serviceWorker.register('/sw.js').then(function () { return navigator.serviceWorker.ready; }).catch(function () { return null; }) : Promise.resolve(null);
+  function b64ToBytes(s) { s = s.replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; var r = atob(s), a = new Uint8Array(r.length); for (var i = 0; i < r.length; i++) a[i] = r.charCodeAt(i); return a; }
+  // A box that explains, offers or confirms push. ctx: { event, t } when coming from an RSVP without an account.
+  function pushBox(ctx) {
+    var id = 'push-' + Math.random().toString(36).slice(2, 8);
+    setTimeout(function () { renderPush(id, ctx || {}); }, 0);
+    return '<div class="box" id="' + id + '" hidden></div>';
+  }
+  function renderPush(id, ctx) {
+    var el = document.getElementById(id); if (!el) return;
+    var show = function (h) { el.innerHTML = '<span class="sc">Notifications</span>' + h; el.hidden = false; };
+    if (isIOS && !standalone) {
+      return show('<p class="small">Get your invitations as notifications on your iPhone, no app to download:</p>' +
+        '<ol class="small" style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px">' +
+        '<li>Tap <b>Share</b> <svg width="14" height="16" viewBox="0 0 14 18" fill="none" stroke="currentColor" stroke-width="1.6" style="vertical-align:-2px"><path d="M7 1v11M3 5l4-4 4 4"/><path d="M4 8H1v9h12V8h-3"/></svg> at the bottom of Safari</li>' +
+        '<li>Choose <b>Add to Home Screen</b></li><li>Open rsvp.fm from your home screen, log in, and turn notifications on</li></ol>' +
+        (person ? '' : '<p class="quiet small">You will need a password to log in there: create it above.</p>'));
+    }
+    if (!pushSupported) return;
+    if (Notification.permission === 'denied') return show('<p class="quiet small">Notifications are blocked for rsvp.fm in your settings.</p>');
+    swReady.then(function (reg) {
+      if (!reg) return;
+      return reg.pushManager.getSubscription().then(function (sub) {
+        if (sub) return show('<p class="small">On this device. New invitations show up as notifications.</p><p><button class="link small" data-act="pushoff" data-id="' + id + '">Turn off</button></p>');
+        if (!person && !(ctx.event && ctx.t)) return;
+        show('<p class="small">Be told the moment a new invitation arrives, right on this ' + (isIOS ? 'iPhone' : 'device') + '.</p>' +
+          '<div><button class="btn small" data-act="pushon" data-id="' + id + '" data-event="' + esc(ctx.event || '') + '" data-t="' + esc(ctx.t || '') + '">Turn on notifications</button></div>');
+      });
+    });
+  }
+  function pushOn(b) {
+    var id = b.getAttribute('data-id');
+    return Notification.requestPermission().then(function (perm) {
+      if (perm !== 'granted') throw new Error('Notifications were not allowed.');
+      return Promise.all([swReady, api('GET', '/push/key')]);
+    }).then(function (r) {
+      return r[0].pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(r[1].key) });
+    }).then(function (sub) {
+      return api('POST', '/push/subscribe', { subscription: sub.toJSON(), event: b.getAttribute('data-event') || undefined, t: b.getAttribute('data-t') || undefined });
+    }).then(function () { say('Notifications on.'); renderPush(id, {}); });
+  }
+  function pushOff(b) {
+    var id = b.getAttribute('data-id');
+    return swReady.then(function (reg) { return reg && reg.pushManager.getSubscription(); }).then(function (sub) {
+      if (!sub) return;
+      return api('POST', '/push/unsubscribe', { endpoint: sub.endpoint }).then(function () { return sub.unsubscribe(); });
+    }).then(function () { say('Notifications off.'); renderPush(id, {}); });
   }
 
   // ---------- guests: email settings ----------
@@ -551,6 +605,7 @@
       if (j.pages.length) h += '<div class="stack"><h3>Pages</h3><div class="list">' + j.pages.map(function (o) {
         return '<a class="item" href="/' + esc(o.handle) + '"><span class="main"><span class="t">' + esc(o.name) + '</span><span class="m">' + esc(KINDS[o.kind] || '') + (o.my_status === 'requested' ? ' · invitation requested' : '') + '</span></span></a>';
       }).join('') + '</div></div>';
+      h += pushBox({});
       h += '<div id="prefs-slot"></div>';
       h += '<hr class="rule"><p class="quiet small">' + esc(j.person.email) + ' · <button class="link small" data-act="plogout">Log out</button></p>';
       main.innerHTML = h + '</div>';
@@ -596,6 +651,11 @@
       f2.elements.namedItem('c_paper').value = st.paper; f2.elements.namedItem('c_ink').value = st.ink; f2.elements.namedItem('c_accent').value = st.accent;
       f2.elements.namedItem('c_display').value = st.display; f2.elements.namedItem('c_text').value = st.text;
       renderCustomPreview(); return;
+    }
+    if (act === 'pushon' || act === 'pushoff') {
+      b.disabled = true;
+      (act === 'pushon' ? pushOn(b) : pushOff(b)).catch(function (e) { say(e.message || 'Could not change notifications.'); b.disabled = false; });
+      return;
     }
     if (act === 'logout') { api('POST', '/logout').then(function () { org = null; go('/', true); }); return; }
     if (act === 'plogout') { api('POST', '/people/logout').then(function () { person = null; go('/', true); }); return; }
@@ -654,10 +714,9 @@
     if (f.id === 'f-signup') {
       api('POST', '/signup', d).then(function (j) { org = j.org; go('/account', true); say('Welcome. Set up your page.'); }).catch(fail);
     } else if (f.id === 'f-login') {
-      var asGuest = f.getAttribute('data-as') === 'guest';
-      api('POST', asGuest ? '/people/login' : '/login', d).then(function (j) {
-        if (asGuest) person = j.person; else org = j.org;
-        go(safeNext || (asGuest ? '/me' : '/'), true);
+      api('POST', '/login', d).then(function (j) {
+        if (j.org) org = j.org; else person = j.person;
+        go(safeNext || (j.org ? '/' : '/me'), true);
       }).catch(fail);
     } else if (f.id === 'f-account') {
       d.custom = readCustom();
@@ -697,7 +756,7 @@
   // ---------- routing ----------
   function route() {
     var p = location.pathname.replace(/\/+$/, '') || '/', m;
-    if (p === '/') return org ? viewEvents() : person ? viewMe() : viewWelcome();
+    if (p === '/') return org ? viewEvents() : person ? viewMe() : standalone ? viewLogin() : viewWelcome();
     if (p === '/login') return viewLogin();
     if (p === '/signup') return org ? go('/', true) : viewSignup();
     if (p === '/account') return viewAccount();
@@ -705,7 +764,10 @@
     if (p === '/me') return viewMe();
     if (p === '/prefs') return viewPrefs();
     if (p === '/new') return viewNew();
-    if ((m = /^\/e\/([a-z0-9]{4,16})$/.exec(p))) return viewManage(m[1]);
+    if ((m = /^\/e\/([a-z0-9]{4,16})$/.exec(p))) return org ? viewManage(m[1]) : (history.replaceState({}, '', '/' + m[1]), viewGuest(m[1]));
+    if ((m = /^\/i\/([a-z0-9]{4,16})$/i.exec(p))) {
+      return api('GET', '/invite/' + m[1].toLowerCase()).then(function (r) { go(r.handle ? '/' + r.handle : '/', true); }).catch(function () { go('/', true); });
+    }
     if ((m = /^\/e\/([a-z0-9]{4,16})\/edit$/.exec(p))) return viewEdit(m[1]);
     if ((m = /^\/([a-z0-9][a-z0-9_-]{1,29})$/i.exec(p))) {
       var slug = m[1].toLowerCase();

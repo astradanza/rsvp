@@ -63,9 +63,11 @@ npm run dev   # http://localhost:8787
 - `public/` — the app (plain HTML/CSS/JS, no build step).
 - `migrations/` — D1 schema. Add a new numbered file for each schema change.
 
-## Guestlist (list.rsvp.fm)
+## Guestlist (rsvp.fm, also list.rsvp.fm)
 
-A second, separate product on its own subdomain, built from scratch around the guestlist only. Same Worker and database, its own tables (`gl_*`), sessions and app (`src/gl.js`, `public/gl/`). Cream paper, serif type, no images.
+Since October 2026 rsvp.fm serves the guestlist; the first version (feed, profiles, walls) stays readable on old.rsvp.fm (add that custom domain to the Worker). Accounts, events and lists of the first version were moved over once (`src/gl-migrate.js`): artists, labels/promoters and clubs became organizers (same email, password and handle; uploaded photo as logo), guests became guest accounts, follows became communities (no email consent), events kept their id (private ones are not shown on the page), guestlist and friends & family RSVPs became confirmed guests. One login for everyone (email or handle).
+
+Built from scratch around the guestlist only. Same Worker and database, its own tables (`gl_*`), sessions and app (`src/gl.js`, `public/gl/`). Cream paper, serif type, no images.
 
 - Organizers (promoter, label or artist; no difference for now) create an account, then an event: name, start and end, venue, city, details, whether guests may bring a +1, +2 or +3, automatic confirmation on or off, list open or closed.
 - Guest page `list.rsvp.fm/<id>`: the invitation (host, event, details) and a "Request a spot on the guestlist" form: full name, email, how many they bring, RSVP. They come back to the same page to see their status (requested, confirmed). Same email again updates the RSVP.
@@ -87,3 +89,7 @@ Sent with Cloudflare Email Service from `<handle>@rsvp.fm` ("Astradanza via rsvp
 - Every digest has an "Email settings or unsubscribe" link and List-Unsubscribe headers; guests choose "as they come", weekly or never (`/prefs`, or in My invitations).
 
 To switch emails on: Workers Paid plan, then Email → Email Sending → add `rsvp.fm` in the Cloudflare dashboard, then add `"send_email": [{ "name": "EMAIL" }]` to `wrangler.jsonc`.
+
+### Push notifications (no app)
+
+Web push from the site itself (`src/gl-push.js`, `public/gl/sw.js`, `manifest.webmanifest`): Android and desktop browsers subscribe in one tap; on iPhone, rsvp.fm must first be added to the home screen (iOS 16.4+), the app explains how. Messages are encrypted (RFC 8291, aes128gcm) and signed with a VAPID key pair created once and kept in `gl_meta`. Sent on confirmation ("You're on the list") and with the daily digest (new invitations, reminder), whether or not email is on. Dead subscriptions are removed.
