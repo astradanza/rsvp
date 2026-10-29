@@ -76,3 +76,14 @@ A second, separate product on its own subdomain, built from scratch around the g
 - Guests: no checkbox on the RSVP. After the RSVP, a "Join <organizer>'s page" step asks them to opt in to the next invitations by email (by tapping Join), with an optional password to receive the organizer's next invitations on rsvp.fm ("My invitations": upcoming events of their pages, their RSVP statuses). No email is sent yet: consent is stored for later.
 
 Setup: Cloudflare → Workers & Pages → the rsvp-fm Worker → Settings → Domains & Routes → Add → Custom domain → `list.rsvp.fm`. Any hostname starting with `list.`, `guestlist.` or `gl.` serves this app.
+
+### Guestlist emails
+
+Sent with Cloudflare Email Service from `<handle>@rsvp.fm` ("Astradanza via rsvp.fm"); code in `src/gl-mail.js`. Nothing is sent until the send binding exists.
+
+- On RSVP: "Request received" (or "You're on the list" when confirmation is automatic), with a link back to the guest's RSVP.
+- On confirmation (one by one or "Confirm everyone"): "You're on the list".
+- Daily at 16:00 UTC (cron): one digest per guest who joined at least one page, listing new invitations they haven't answered, plus one reminder for invitations still waiting less than three days before the event. Each invitation is emailed once (`gl_mail_log`).
+- Every digest has an "Email settings or unsubscribe" link and List-Unsubscribe headers; guests choose "as they come", weekly or never (`/prefs`, or in My invitations).
+
+To switch emails on: Workers Paid plan, then Email → Email Sending → add `rsvp.fm` in the Cloudflare dashboard, then add `"send_email": [{ "name": "EMAIL" }]` to `wrangler.jsonc`.

@@ -3,7 +3,7 @@
   'use strict';
   var main = document.getElementById('main');
   var hdr = document.getElementById('hdr');
-  var org = null, person = null;
+  var org = null, person = null, mailOn = false;
   var KINDS = { promoter: 'Promoter', label: 'Label', artist: 'Artist' };
   var DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -404,6 +404,7 @@
       }).join('') + '</div>';
       h += '<div class="acts"><button class="btn small line" data-act="copytext">Copy as text</button><button class="btn small line" data-act="csv">Export CSV</button></div>';
     }
+    h += '<p class="quiet small">' + (mailOn ? 'Guests get an email when they RSVP and when you confirm them.' : 'Emails are not switched on yet: guests see their status on the event page.') + '</p>';
     h += '<hr class="rule"><div class="acts"><a class="link" href="/e/' + esc(e.id) + '/edit">Edit event</a><button class="link" data-act="toggleopen">' + (e.open ? 'Close the guestlist' : 'Reopen the guestlist') + '</button></div></div>';
     main.innerHTML = h;
   }
@@ -520,6 +521,21 @@
       '<p class="quiet small">By joining, you agree that ' + host + ' emails you their next invitations.</p></form></div>';
   }
 
+  // ---------- guests: email settings ----------
+  function prefsWidget(digest, q) {
+    return '<div class="stack" style="gap:8px"><h3>Invitation emails</h3><div class="seg" id="prefs" data-q="' + esc(q || '') + '">' +
+      [['daily', 'As they come'], ['weekly', 'Weekly'], ['never', 'Never']].map(function (o) {
+        return '<label><input type="radio" name="digest" value="' + o[0] + '"' + (digest === o[0] ? ' checked' : '') + ' data-act="digest"><span>' + o[1] + '</span></label>';
+      }).join('') + '</div><p class="quiet small">From the pages you joined: new invitations, and one reminder when an event is close and you haven\'t answered.</p></div>';
+  }
+  function viewPrefs() {
+    header(); loading();
+    var q = location.search;
+    api('GET', '/prefs' + q).then(function (j) {
+      main.innerHTML = '<div class="stack lg"><div class="stack"><p class="sc">' + esc(j.email) + '</p><h1>Email settings</h1></div>' + prefsWidget(j.digest, q) + '</div>';
+    }).catch(showError);
+  }
+
   // ---------- guests: my invitations ----------
   function viewMe() {
     if (!person) return go('/login?as=guest', true);
@@ -535,8 +551,10 @@
       if (j.pages.length) h += '<div class="stack"><h3>Pages</h3><div class="list">' + j.pages.map(function (o) {
         return '<a class="item" href="/' + esc(o.handle) + '"><span class="main"><span class="t">' + esc(o.name) + '</span><span class="m">' + esc(KINDS[o.kind] || '') + (o.my_status === 'requested' ? ' · invitation requested' : '') + '</span></span></a>';
       }).join('') + '</div></div>';
+      h += '<div id="prefs-slot"></div>';
       h += '<hr class="rule"><p class="quiet small">' + esc(j.person.email) + ' · <button class="link small" data-act="plogout">Log out</button></p>';
       main.innerHTML = h + '</div>';
+      api('GET', '/prefs').then(function (p) { var sl = document.getElementById('prefs-slot'); if (sl) sl.innerHTML = prefsWidget(p.digest, ''); }).catch(function () {});
     }).catch(showError);
   }
 
@@ -547,6 +565,11 @@
     var b = ev.target.closest('[data-act]'); if (!b) return;
     var act = b.getAttribute('data-act'), id = b.getAttribute('data-id');
     if (act === 'sort') { current.sort = b.value; renderManage(); return; }
+    if (act === 'digest') {
+      var q = (document.getElementById('prefs') || {}).getAttribute ? document.getElementById('prefs').getAttribute('data-q') : '';
+      api('POST', '/prefs' + (q || ''), { digest: b.value }).then(function (r) { say(r.digest === 'never' ? 'No more invitation emails.' : r.digest === 'weekly' ? 'One email a week, at most.' : 'Saved.'); }).catch(function (e) { say(e.message); });
+      return;
+    }
     if (act === 'loginas') { go('/login' + (id === 'guest' ? '?as=guest' : ''), true); return; }
     if (act === 'copylink') return copy(id, 'Link copied.');
     if (act === 'sharelink') { navigator.share({ title: current.event.title, url: id }).catch(function () {}); return; }
@@ -589,7 +612,7 @@
     } else if (act === 'confirmall') {
       api('POST', '/events/' + current.event.id + '/confirm-all').then(function (r) {
         current.guests.forEach(function (g) { if (g.status === 'requested') g.status = 'confirmed'; });
-        renderManage(); say(r.confirmed + ' confirmed.');
+        renderManage(); say(r.confirmed + ' confirmed' + (r.emailed ? ', emails on their way.' : '.'));
       }).catch(function (e) { say(e.message); done(); });
     } else if (act === 'toggleopen') {
       var open = !current.event.open;
@@ -680,6 +703,7 @@
     if (p === '/account') return viewAccount();
     if (p === '/community') return viewCommunity();
     if (p === '/me') return viewMe();
+    if (p === '/prefs') return viewPrefs();
     if (p === '/new') return viewNew();
     if ((m = /^\/e\/([a-z0-9]{4,16})$/.exec(p))) return viewManage(m[1]);
     if ((m = /^\/e\/([a-z0-9]{4,16})\/edit$/.exec(p))) return viewEdit(m[1]);
@@ -692,5 +716,5 @@
     header(); main.innerHTML = '<div class="stack center"><p class="when">Nothing here.</p><p><a href="/">Back</a></p></div>';
   }
   window.addEventListener('popstate', route);
-  api('GET', '/session').then(function (j) { org = j.org; person = j.person; }).catch(function () {}).then(route);
+  api('GET', '/session').then(function (j) { org = j.org; person = j.person; mailOn = !!j.mail; }).catch(function () {}).then(route);
 })();

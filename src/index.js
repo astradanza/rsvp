@@ -1,7 +1,7 @@
 // rsvp.fm — Cloudflare Worker: JSON API under /api, static app for everything else.
 import { SCHEMA } from './schema.js';
 import { importEvent, captionFrom, sourceName } from './importer.js';
-import { isGuestlistHost, handleGuestlist } from './gl.js';
+import { isGuestlistHost, handleGuestlist, guestlistDaily } from './gl.js';
 
 // Create the tables on first use (idempotent), so a plain `wrangler deploy` is enough.
 // Columns added after launch: added here if missing (mirrors migrations/0002_invite_links.sql).
@@ -110,10 +110,14 @@ async function dropImage(env, me, url) {
 }
 
 export default {
-  async fetch(request, env) {
+  // Daily: the guestlist's invitation emails
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(guestlistDaily(env));
+  },
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     // list.rsvp.fm: the guestlist product, separate app and tables
-    if (isGuestlistHost(url.hostname)) return handleGuestlist(request, env, url);
+    if (isGuestlistHost(url.hostname)) return handleGuestlist(request, env, url, ctx);
     if (url.pathname.startsWith('/api/')) {
       try {
         await ensureSchema(env);
