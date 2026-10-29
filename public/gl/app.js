@@ -9,13 +9,14 @@
   var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   // Six themes for organizer pages: colors and type. Fonts load when a theme is shown.
   var THEMES = {
-    creme: { name: 'Crème', paper: '#F2EDE3', ink: '#1C1B19', display: "'Cormorant Garamond'", fonts: '' },
-    nuit: { name: 'Nuit', paper: '#121110', ink: '#EDE6D8', display: "'Playfair Display'", fonts: 'Playfair+Display:ital,wght@0,400;0,500;1,400' },
-    galerie: { name: 'Galerie', paper: '#FBFAF7', ink: '#0E0E0E', display: "'Bodoni Moda'", fonts: 'Bodoni+Moda:ital,opsz,wght@0,6..96,400;0,6..96,500;1,6..96,400&family=Libre+Caslon+Text:ital,wght@0,400;1,400' },
-    sauge: { name: 'Sauge', paper: '#DDE2D4', ink: '#1F2A22', display: "'Fraunces'", fonts: 'Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;1,9..144,400' },
-    bordeaux: { name: 'Bordeaux', paper: '#4E1A18', ink: '#F3E7D6', display: "'Cormorant Garamond'", fonts: '' },
-    minuit: { name: 'Minuit', paper: '#141B2B', ink: '#E9E4D8', display: "'Libre Caslon Display'", fonts: 'Libre+Caslon+Display&family=Libre+Caslon+Text:ital,wght@0,400;1,400' }
+    creme: { name: 'Crème', paper: '#F2EDE3', ink: '#1C1B19', display: "'Cormorant Garamond'", text: "'EB Garamond'", type: 'Cormorant · Garamond', fonts: '' },
+    nuit: { name: 'Nuit', paper: '#121110', ink: '#EDE6D8', display: "'Playfair Display'", text: "'Source Serif 4'", type: 'Playfair · Source Serif', fonts: 'Playfair+Display:ital,wght@0,400;0,500;1,400&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;1,8..60,400' },
+    galerie: { name: 'Galerie', paper: '#FBFAF7', ink: '#0E0E0E', display: "'Bodoni Moda'", text: "'Jost'", type: 'Bodoni · Jost', fonts: 'Bodoni+Moda:ital,opsz,wght@0,6..96,400;0,6..96,500;1,6..96,400&family=Jost:wght@300;400;500' },
+    sauge: { name: 'Sauge', paper: '#DDE2D4', ink: '#1F2A22', display: "'Fraunces'", text: "'Newsreader'", type: 'Fraunces · Newsreader', fonts: 'Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;1,9..144,400&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400' },
+    bordeaux: { name: 'Bordeaux', paper: '#4E1A18', ink: '#F3E7D6', display: "'DM Serif Display'", text: "'Spectral'", type: 'DM Serif · Spectral', fonts: 'DM+Serif+Display:ital@0;1&family=Spectral:ital,wght@0,300;0,400;0,500;1,400' },
+    minuit: { name: 'Minuit', paper: '#141B2B', ink: '#E9E4D8', display: "'Instrument Serif'", text: "'IBM Plex Mono'", type: 'Instrument · Plex Mono', fonts: 'Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400' }
   };
+
   var loadedFonts = {};
   function loadFonts(t) {
     var th = THEMES[t]; if (!th || !th.fonts || loadedFonts[t]) return;
@@ -145,7 +146,7 @@
     Object.keys(THEMES).forEach(loadFonts);
     return '<div class="themes">' + Object.keys(THEMES).map(function (k) {
       var t = THEMES[k];
-      return '<label><input type="radio" name="theme" value="' + k + '"' + (current === k ? ' checked' : '') + '><span class="sw" style="background:' + t.paper + ';color:' + t.ink + ';font-family:' + t.display + ',Georgia,serif"><b>Aa</b><i>' + t.name + '</i></span></label>';
+      return '<label><input type="radio" name="theme" value="' + k + '"' + (current === k ? ' checked' : '') + '><span class="sw" style="background:' + t.paper + ';color:' + t.ink + '"><b style="font-family:' + t.display + ',Georgia,serif">Aa</b><i style="font-family:' + t.text + ',Georgia,serif">' + t.name + '</i><small style="font-family:' + t.text + ',Georgia,serif">' + t.type + '</small></span></label>';
     }).join('') + '</div>';
   }
   function viewAccount() {
