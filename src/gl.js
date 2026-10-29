@@ -6,7 +6,8 @@
 
 const SESSION_DAYS = 60;
 const KINDS = ['promoter', 'label', 'artist'];
-const THEMES = ['creme', 'nuit', 'galerie', 'sauge', 'bordeaux', 'minuit'];
+const THEMES = ['terminal', 'phosphor', 'amber', 'graphite', 'solarized', 'nocturne'];
+const DEFAULT_THEME = 'terminal';
 const RESERVED = new Set(['api', 'e', 'new', 'login', 'signup', 'logout', 'account', 'community', 'me', 'img', 'app', 'style', 'favicon',
   'admin', 'settings', 'help', 'about', 'terms', 'privacy', 'www', 'list', 'rsvp', 'events', 'event', 'invite', 'join', 'guest', 'guests']);
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,29}$/;
@@ -160,9 +161,9 @@ async function startPersonSession(env, personId, url) {
 // ---------- shapes ----------
 const orgShape = (o) => ({
   name: o.name, kind: o.kind, email: o.email, handle: o.handle, bio: o.bio || '', logo: o.logo || '',
-  theme: o.theme || 'creme', visibility: o.visibility || 'public', invite_token: o.invite_token
+  theme: THEMES.includes(o.theme) ? o.theme : DEFAULT_THEME, visibility: o.visibility || 'public', invite_token: o.invite_token
 });
-const publicOrg = (o) => ({ name: o.name, kind: o.kind, handle: o.handle, bio: o.bio || '', logo: o.logo || '', theme: o.theme || 'creme', visibility: o.visibility || 'public' });
+const publicOrg = (o) => ({ name: o.name, kind: o.kind, handle: o.handle, bio: o.bio || '', logo: o.logo || '', theme: THEMES.includes(o.theme) ? o.theme : DEFAULT_THEME, visibility: o.visibility || 'public' });
 const personShape = (p) => ({ name: p.name, email: p.email });
 
 function eventFields(b) {
@@ -260,7 +261,7 @@ async function api(request, env, url) {
     const name = str(b.name, 80) || org.name;
     const kind = KINDS.includes(b.kind) ? b.kind : org.kind;
     const bio = typeof b.bio === 'string' ? b.bio.replace(/\r\n/g, '\n').trim().slice(0, 600) : org.bio;
-    const theme = THEMES.includes(b.theme) ? b.theme : org.theme;
+    const theme = THEMES.includes(b.theme) ? b.theme : THEMES.includes(org.theme) ? org.theme : DEFAULT_THEME;
     const visibility = b.visibility === 'private' ? 'private' : b.visibility === 'public' ? 'public' : org.visibility;
     let handle = org.handle;
     if (typeof b.handle === 'string' && b.handle.trim().toLowerCase().replace(/^@/, '') !== org.handle) {
@@ -488,7 +489,7 @@ async function api(request, env, url) {
   if (seg[0] === 'p' && seg[1]) {
     const e = await env.DB.prepare('SELECT e.*, o.name AS org_name, o.kind AS org_kind, o.handle AS org_handle, o.logo AS org_logo, o.theme AS org_theme, o.visibility AS org_visibility FROM gl_events e JOIN gl_orgs o ON o.id = e.org_id WHERE e.id = ?').bind(String(seg[1])).first();
     if (!e) fail(404, 'This guestlist does not exist.');
-    const shape = { ...eventShape(e), host: { name: e.org_name, kind: e.org_kind, handle: e.org_handle, logo: e.org_logo || '', theme: e.org_theme || 'creme', visibility: e.org_visibility } };
+    const shape = { ...eventShape(e), host: { name: e.org_name, kind: e.org_kind, handle: e.org_handle, logo: e.org_logo || '', theme: THEMES.includes(e.org_theme) ? e.org_theme : DEFAULT_THEME, visibility: e.org_visibility } };
     delete shape.auto_confirm;
     if (seg.length === 2 && method === 'GET') {
       const t = url.searchParams.get('t');
