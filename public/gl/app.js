@@ -73,9 +73,10 @@
       if (!(FONTS[custom.text] || {}).mono) body.setAttribute('data-plain', '1');
     } else {
       if (t !== '') t = THEMES[t] ? t : DEFAULT_THEME;
-      if (t) { loadFonts(t); body.setAttribute('data-theme', t); } else body.removeAttribute('data-theme');
+      // '' = the back office and rsvp.fm's own pages: black, Helvetica bold, LCD mono
+      if (t) { loadFonts(t); body.setAttribute('data-theme', t); } else { loadFont('Share Tech Mono'); body.setAttribute('data-theme', 'house'); }
     }
-    var m = document.querySelector('meta[name=theme-color]'); if (m) m.setAttribute('content', t === 'custom' && custom ? custom.paper : t ? THEMES[t].paper : '#F2EDE3');
+    var m = document.querySelector('meta[name=theme-color]'); if (m) m.setAttribute('content', t === 'custom' && custom ? custom.paper : t ? THEMES[t].paper : '#000000');
   }
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
@@ -160,7 +161,7 @@
       '<div class="acts"><a class="btn" href="/signup">Create an account</a><a class="btn line" href="/login">Log in</a></div>' +
       '<hr class="rule">' +
       '<div class="stack">' +
-      '<div><h2><em>i.</em> Your page</h2><p class="quiet">Your logo, a few words, one of six themes. Public, or private: by invitation only.</p></div>' +
+      '<div><h2><em>i.</em> Your page</h2><p class="quiet">Your logo, a few words, a theme of your own. Public, or private: by invitation only.</p></div>' +
       '<div><h2><em>ii.</em> Your guestlists</h2><p class="quiet">A name, a date, a place. Guests write their full name and email, bring a +1, +2 or +3 if you allow it, and RSVP.</p></div>' +
       '<div><h2><em>iii.</em> Your community</h2><p class="quiet">Everyone who RSVPs can ask to be kept posted. Next time, they hear from you first.</p></div>' +
       '</div></div>';

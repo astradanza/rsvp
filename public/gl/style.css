@@ -189,3 +189,32 @@ body[data-theme=minimal] .card{border-color:var(--line)}
 body[data-theme=minimal] .btn{font-family:var(--text);letter-spacing:.14em}
 body[data-theme=minimal] .when,body[data-theme=minimal] .date{letter-spacing:.04em}
 @media (max-width:480px){body[data-theme=minimal] h1{font-size:32px}}
+
+/* House look (back office, welcome, log in): the first rsvp.fm's black, Helvetica bold titles, LCD mono text */
+body[data-theme=house]{--paper:#000000;--paper2:#0A0A0A;--ink:#EDEDED;--muted:#8A8A8A;--faint:#5C5C5C;--line:#1F1F1F;--accent:#FF5A36;--ok:#FF5A36;--display:'Helvetica Neue',Helvetica,Arial,sans-serif;--text:'Share Tech Mono',ui-monospace,Menlo,monospace}
+body[data-theme=house] h1{font-weight:700;letter-spacing:-.04em;font-size:40px;line-height:1.02}
+body[data-theme=house] h1 em{font-style:normal;color:var(--muted)}
+body[data-theme=house] h2{font-weight:700;letter-spacing:-.03em;font-size:22px}
+body[data-theme=house] h2 em{font-style:normal;color:var(--muted)}
+body[data-theme=house] .wordmark{font-family:var(--display);font-weight:700;letter-spacing:-.04em}
+body[data-theme=house] .wordmark em{font-style:normal;color:var(--muted);font-weight:700}
+body[data-theme=house] .nav a{font-family:var(--text);font-size:13px;letter-spacing:.06em}
+body[data-theme=house] .item .t{font-family:var(--display);font-weight:700;letter-spacing:-.025em;font-size:19px}
+body[data-theme=house] .guest .n{font-family:var(--display);font-weight:700;letter-spacing:-.02em;font-size:17px}
+body[data-theme=house] .guest .n .plus{font-family:var(--text);font-weight:400;font-style:normal}
+body[data-theme=house] .stat b{font-family:var(--display);font-weight:700;letter-spacing:-.04em;font-size:40px}
+body[data-theme=house] .when,body[data-theme=house] .date{font-style:normal;color:var(--ink);letter-spacing:.04em}
+body[data-theme=house] .date{color:var(--muted)}
+body[data-theme=house] .btn{font-family:var(--text);letter-spacing:.14em;font-weight:400}
+body[data-theme=house] .tag{font-family:var(--text)}
+body[data-theme=house] .box{background:var(--paper2);border-color:var(--line)}
+body[data-theme=house] .card{border-color:var(--line)}
+body[data-theme=house] .lead{color:var(--muted)}
+body[data-theme=house] input,body[data-theme=house] select{border-bottom-color:#3A3A3A}
+body[data-theme=house] input:focus,body[data-theme=house] select:focus,body[data-theme=house] textarea:focus{border-color:var(--ink)}
+body[data-theme=house] textarea{border-color:#3A3A3A}
+body[data-theme=house] .err{color:var(--accent);font-style:normal}
+body[data-theme=house] .ornament{letter-spacing:.3em}
+body[data-theme=house] .stepper span b{font-family:var(--display)}
+@media (max-width:480px){body[data-theme=house] h1{font-size:34px}}
+body[data-theme=house] .guest .n .e{font-family:var(--text);font-weight:400;letter-spacing:0;color:var(--muted)}

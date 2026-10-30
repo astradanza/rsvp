@@ -67,7 +67,7 @@ npm run dev   # http://localhost:8787
 
 Since October 2026 rsvp.fm serves the guestlist; the first version (feed, profiles, walls) stays readable on old.rsvp.fm (add that custom domain to the Worker). Accounts, events and lists of the first version were moved over once (`src/gl-migrate.js`): artists, labels/promoters and clubs became organizers (same email, password and handle; uploaded photo as logo), guests became guest accounts, follows became communities (no email consent), events kept their id (private ones are not shown on the page), guestlist and friends & family RSVPs became confirmed guests. One login for everyone (email or handle).
 
-Built from scratch around the guestlist only. Same Worker and database, its own tables (`gl_*`), sessions and app (`src/gl.js`, `public/gl/`). Cream paper, serif type, no images.
+Built from scratch around the guestlist only. Same Worker and database, its own tables (`gl_*`), sessions and app (`src/gl.js`, `public/gl/`). Black, Helvetica bold and LCD mono for rsvp.fm's own pages and the back office; organizer pages wear their theme.
 
 - Organizers (promoter, label or artist; no difference for now) create an account, then an event: name, start and end, venue, city, details, whether guests may bring a +1, +2 or +3, automatic confirmation on or off, list open or closed.
 - Guest page `list.rsvp.fm/<id>`: the invitation (host, event, details) and a "Request a spot on the guestlist" form: full name, email, how many they bring, RSVP. They come back to the same page to see their status (requested, confirmed). Same email again updates the RSVP.
