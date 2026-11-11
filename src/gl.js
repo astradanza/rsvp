@@ -139,7 +139,7 @@ async function ensureSchema(env) {
     ['custom_theme', "TEXT NOT NULL DEFAULT ''"], ['v1_user_id', 'INTEGER']
   ]);
   await addColumns(env, 'gl_guests', [['consent', 'INTEGER NOT NULL DEFAULT 0'], ['names', "TEXT NOT NULL DEFAULT ''"], ['invite_code', 'TEXT']]);
-  await addColumns(env, 'gl_events', [['listed', 'INTEGER NOT NULL DEFAULT 1'], ['slug', 'TEXT']]);
+  await addColumns(env, 'gl_events', [['listed', 'INTEGER NOT NULL DEFAULT 1'], ['slug', 'TEXT'], ['photos', "TEXT NOT NULL DEFAULT '[]'"]]);
   await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS gl_orgs_handle ON gl_orgs(handle)').run();
   // guests who RSVP'd before communities existed join their organizer's community (no email consent)
   if (!(await env.DB.prepare('SELECT 1 FROM gl_contacts LIMIT 1').first())) {
@@ -243,9 +243,26 @@ function eventFields(b) {
 }
 const eventShape = (e) => ({
   id: e.id, title: e.title, starts_at: e.starts_at, ends_at: e.ends_at, venue: e.venue, city: e.city, details: e.details,
-  slug: e.slug || '', plus_max: e.plus_max, auto_confirm: !!e.auto_confirm, open: !!e.open, listed: e.listed == null ? true : !!e.listed, created_at: e.created_at
+  slug: e.slug || '', photos: photosOf(e), plus_max: e.plus_max, auto_confirm: !!e.auto_confirm, open: !!e.open, listed: e.listed == null ? true : !!e.listed, created_at: e.created_at
 });
 const guestShape = (g) => ({ id: g.id, name: g.name, email: g.email, plus: g.plus, names: namesOf(g), invite_code: g.invite_code || '', status: g.status, consent: !!g.consent, created_at: g.created_at, updated_at: g.updated_at });
+// Event photos: a JSON list of /api/img/<id>, the first one is the cover
+const photosOf = (e) => { try { const a = JSON.parse(e.photos || '[]'); return Array.isArray(a) ? a.filter((x) => /^\/api\/img\/[a-z0-9]+$/.test(x)) : []; } catch { return []; } };
+// Keep only photos this organizer uploaded, at most 12
+async function ownPhotos(env, org, raw) {
+  let list = raw;
+  if (typeof list === 'string') { try { list = JSON.parse(list); } catch { list = []; } }
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const u of list.slice(0, 12)) {
+    const m = /^\/api\/img\/([a-z0-9]+)$/.exec(String(u));
+    if (m && !out.includes(u) && await env.DB.prepare('SELECT 1 FROM gl_images WHERE id = ? AND org_id = ?').bind(m[1], org.id).first()) out.push(u);
+  }
+  return out;
+}
+async function dropPhotos(env, org, urls) {
+  for (const u of urls) await env.DB.prepare('DELETE FROM gl_images WHERE id = ? AND org_id = ?').bind(String(u).split('/').pop(), org.id).run();
+}
 // Extra names registered through a unique link (one per line)
 const namesOf = (g) => String(g.names || '').split('\n').map((x) => x.trim()).filter(Boolean);
 const UPCOMING = `(e.starts_at = '' OR e.starts_at >= strftime('%Y-%m-%dT%H:%M', 'now', '-1 day'))`;
@@ -418,6 +435,18 @@ async function api(request, env, url, ctx) {
     await env.DB.prepare('UPDATE gl_orgs SET logo = ? WHERE id = ?').bind(logo, org.id).run();
     return json({ logo });
   }
+  // A photo for an event (resized in the browser)
+  if (path === '/api/images' && method === 'POST') {
+    need();
+    const b = await body(request);
+    const m = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(b.data || ''));
+    if (!m) fail(400, 'Upload a PNG, JPEG or WebP image.');
+    const bytes = unb64(m[2]);
+    if (bytes.length > 950000) fail(413, 'This photo is too large. Try a smaller one.');
+    const id = code(16);
+    await env.DB.prepare('INSERT INTO gl_images (id, org_id, mime, data) VALUES (?, ?, ?, ?)').bind(id, org.id, m[1], bytes).run();
+    return json({ url: '/api/img/' + id }, 201);
+  }
   if (path === '/api/me/logo' && method === 'DELETE') {
     need();
     if (org.logo) await env.DB.prepare('DELETE FROM gl_images WHERE id = ? AND org_id = ?').bind(org.logo.split('/').pop(), org.id).run();
@@ -475,10 +504,11 @@ async function api(request, env, url, ctx) {
     let id = code(8);
     while (await env.DB.prepare('SELECT 1 FROM gl_orgs WHERE handle = ?').bind(id).first()) id = code(8);
     const slug = await eventSlug(env, org.id, b, f.title, id);
+    const photos = await ownPhotos(env, org, b.photos);
     await env.DB.prepare(
-      `INSERT INTO gl_events (id, org_id, title, starts_at, ends_at, venue, city, details, plus_max, auto_confirm, open, listed, slug)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(id, org.id, f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed, slug).run();
+      `INSERT INTO gl_events (id, org_id, title, starts_at, ends_at, venue, city, details, plus_max, auto_confirm, open, listed, slug, photos)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, org.id, f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed, slug, JSON.stringify(photos)).run();
     return json({ id, slug }, 201);
   }
   if (seg[0] === 'events' && seg[1]) {
@@ -495,13 +525,17 @@ async function api(request, env, url, ctx) {
       const b = await body(request);
       const f = eventFields(b);
       const slug = b.slug === undefined ? e.slug : await eventSlug(env, org.id, b, f.title, e.id);
+      const before = photosOf(e);
+      const photos = b.photos === undefined ? before : await ownPhotos(env, org, b.photos);
       await env.DB.prepare(
-        `UPDATE gl_events SET title = ?, starts_at = ?, ends_at = ?, venue = ?, city = ?, details = ?, plus_max = ?, auto_confirm = ?, open = ?, listed = ?, slug = ? WHERE id = ?`
-      ).bind(f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed, slug, e.id).run();
+        `UPDATE gl_events SET title = ?, starts_at = ?, ends_at = ?, venue = ?, city = ?, details = ?, plus_max = ?, auto_confirm = ?, open = ?, listed = ?, slug = ?, photos = ? WHERE id = ?`
+      ).bind(f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed, slug, JSON.stringify(photos), e.id).run();
+      await dropPhotos(env, org, before.filter((u) => !photos.includes(u)));
       return json({ id: e.id });
     }
     if (seg.length === 2 && method === 'DELETE') {
       await env.DB.prepare('DELETE FROM gl_events WHERE id = ?').bind(e.id).run();
+      await dropPhotos(env, org, photosOf(e));
       return json({ ok: true });
     }
     if (seg[2] === 'open' && method === 'POST') {

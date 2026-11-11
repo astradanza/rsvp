@@ -340,6 +340,10 @@
       '<div class="two"><label><span>Venue</span><input name="venue" maxlength="120" value="' + esc(v.venue || '') + '"></label>' +
       '<label><span>City</span><input name="city" maxlength="80" value="' + esc(v.city || '') + '"></label></div>' +
       '<label><span>Details</span><textarea name="details" maxlength="4000" placeholder="Line-up, address, dress code, door time, anything guests should know.">' + esc(v.details || '') + '</textarea></label>' +
+      '<div class="stack" style="gap:8px"><span class="sc" style="font-size:13px">Photos</span>' +
+      '<input type="hidden" name="photos" value="' + esc(JSON.stringify(v.photos || [])) + '"><div id="photos">' + photosGrid(v.photos || []) + '</div>' +
+      '<div class="acts"><label class="btn small line" style="flex-direction:row;cursor:pointer">Add photos<input type="file" id="up-photos" accept="image/*" multiple hidden></label>' +
+      '<span class="quiet small">The first one is the cover. Up to 12.</span></div></div>' +
       '<label><span>Guests may bring</span><select name="plus_max">' +
       ['No one', 'A +1', 'Up to +2', 'Up to +3'].map(function (t, i) { return '<option value="' + i + '"' + (pm === i ? ' selected' : '') + '>' + t + '</option>'; }).join('') + '</select></label>' +
       '<label class="check"><input type="checkbox" name="auto_confirm"' + (v.auto_confirm ? ' checked' : '') + '><span>Confirm requests automatically<small>Otherwise every RSVP waits for your confirmation.</small></span></label>' +
@@ -348,6 +352,39 @@
       '<p class="err" id="err" hidden></p><div class="acts"><button class="btn" type="submit">' + (id ? 'Save' : 'Create the guestlist') + '</button>' +
       (id ? '<a class="link" href="/e/' + esc(id) + '">Cancel</a>' : '') + '</div></form>';
   }
+  // Event photos in the form: thumbnails, tap ★ to make one the cover, × to remove
+  function photosGrid(list) {
+    if (!list.length) return '';
+    return '<div class="photos">' + list.map(function (u, i) {
+      return '<div class="ph"><img src="' + esc(u) + '" alt="">' + (i === 0 ? '<span class="ph-cover">Cover</span>' : '<button type="button" class="ph-btn ph-star" data-act="coverphoto" data-id="' + esc(u) + '" aria-label="Make it the cover">★</button>') +
+        '<button type="button" class="ph-btn ph-x" data-act="rmphoto" data-id="' + esc(u) + '" aria-label="Remove">×</button></div>';
+    }).join('') + '</div>';
+  }
+  function formPhotos() { var el = document.querySelector('#f-event input[name=photos]'); try { return el ? JSON.parse(el.value || '[]') : []; } catch (e) { return []; } }
+  function setFormPhotos(list) {
+    var el = document.querySelector('#f-event input[name=photos]'); if (!el) return;
+    el.value = JSON.stringify(list); document.getElementById('photos').innerHTML = photosGrid(list);
+  }
+  // Photos are resized in the browser: 1600px, JPEG
+  function preparePhoto(file) {
+    return new Promise(function (resolve, reject) {
+      var img = new Image(), url = URL.createObjectURL(file);
+      img.onload = function () {
+        var out = '', sizes = [1600, 1280, 1024];
+        for (var i = 0; i < sizes.length; i++) {
+          var s = Math.min(1, sizes[i] / Math.max(img.width, img.height));
+          var c = document.createElement('canvas'); c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+          c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+          out = c.toDataURL('image/jpeg', 0.84);
+          if (out.length < 1200000) break;
+        }
+        URL.revokeObjectURL(url); resolve(out);
+      };
+      img.onerror = function () { reject(new Error('This file could not be read as an image.')); };
+      img.src = url;
+    });
+  }
+
   function viewNew() {
     if (!org) return go('/login', true);
     header(); setNav('events');
@@ -502,12 +539,16 @@
       var e = j.event, host = e.host, h = '<div class="stack lg">';
       header('guest'); theme(host.theme, host.custom);
       document.title = e.title + ' — ' + host.name;
+      var ph = e.photos || [];
+      if (ph[0]) h += '<img class="cover" src="' + esc(ph[0]) + '" alt="">';
       h += '<div class="stack center">' + (host.logo ? '<a href="/' + esc(host.handle) + '" style="text-decoration:none">' + logoImg(host.logo, 'mark') + '</a>' : '') +
         '<p class="sc"><a href="/' + esc(host.handle) + '" style="text-decoration:none">' + esc(host.name) + '</a> invites you</p><h1>' + esc(e.title) + '</h1>' +
         (e.starts_at ? '<p class="when">' + esc(whenLine(e)) + '</p>' : '') +
         ([e.venue, e.city].filter(Boolean).length ? '<p class="quiet">' + esc([e.venue, e.city].filter(Boolean).join(', ')) + '</p>' : '') + '</div>';
       h += '<p class="ornament">· · ·</p>';
-      if (e.details) h += '<p class="details">' + esc(e.details) + '</p><hr class="rule">';
+      if (e.details) h += '<p class="details">' + esc(e.details) + '</p>';
+      if (ph.length > 1) h += '<div class="gallery">' + ph.slice(1).map(function (u) { return '<a href="' + esc(u) + '" target="_blank" rel="noopener"><img src="' + esc(u) + '" alt="" loading="lazy"></a>'; }).join('') + '</div>';
+      if (e.details || ph.length > 1) h += '<hr class="rule">';
       if (j.invite && !j.invite.mine && j.invite.used) h += '<div class="card"><p class="sc">Invitation</p><h2>This link has already been used.</h2><p class="quiet small">Ask ' + esc(host.name) + ' for a new one.</p></div>';
       else if (j.invite && !(j.mine && j.mine.invite_code === j.invite.code)) h += inviteForm(e, j.invite, person || j.mine || {});
       else if (j.mine) h += statusCard(e, j.mine, id) + afterRsvp(e, j.mine, id);
@@ -710,6 +751,8 @@
       (act === 'pushon' ? pushOn(b) : pushOff(b)).catch(function (e) { say(e.message || 'Could not change notifications.'); b.disabled = false; });
       return;
     }
+    if (act === 'rmphoto') { setFormPhotos(formPhotos().filter(function (u) { return u !== id; })); return; }
+    if (act === 'coverphoto') { var pl = formPhotos().filter(function (u) { return u !== id; }); pl.unshift(id); setFormPhotos(pl); return; }
     if (act === 'logout') { api('POST', '/logout').then(function () { org = null; go('/', true); }); return; }
     if (act === 'plogout') { api('POST', '/people/logout').then(function () { person = null; go('/', true); }); return; }
     b.disabled = true;
@@ -759,6 +802,19 @@
   document.addEventListener('input', onCustomInput);
   document.addEventListener('change', function (ev) {
     onCustomInput(ev);
+    if (ev.target.id === 'up-photos' && ev.target.files.length) {
+      var files = Array.prototype.slice.call(ev.target.files, 0, 12), list = formPhotos(), btn = document.querySelector('#f-event [type=submit]');
+      if (btn) btn.disabled = true;
+      say('Uploading ' + files.length + (files.length === 1 ? ' photo…' : ' photos…'));
+      files.reduce(function (p, f) {
+        return p.then(function () {
+          if (list.length >= 12) return;
+          return preparePhoto(f).then(function (data) { return api('POST', '/images', { data: data }); }).then(function (r) { list.push(r.url); setFormPhotos(list); });
+        });
+      }, Promise.resolve()).then(function () { say('Photos added. Save to publish them.'); }).catch(function (e) { say(e.message); })
+        .then(function () { if (btn) btn.disabled = false; ev.target.value = ''; });
+      return;
+    }
     if (ev.target.id !== 'up-logo' || !ev.target.files[0]) return;
     say('Uploading…');
     prepareLogo(ev.target.files[0]).then(function (data) { return api('POST', '/me/logo', { data: data }); })
