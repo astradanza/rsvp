@@ -49,14 +49,14 @@ async function logMail(env, row) {
 }
 
 // Send one email; never throws (an email failure must not break an RSVP).
-async function send(env, { to, fromHandle, fromName, subject, body, kind, event_id, org_id, unsubscribe }) {
+async function send(env, { to, fromHandle, fromName, subject, body, raw, kind, event_id, org_id, unsubscribe }) {
   if (!mailEnabled(env)) return false;
   const msg = {
     to,
     from: { email: `${fromHandle || 'invitations'}@${MAIL_DOMAIN}`, name: fromName ? `${fromName} via rsvp.fm` : 'rsvp.fm' },
     subject,
-    html: layout(body),
-    text: textOf(body)
+    html: raw ? raw.html : layout(body),
+    text: raw ? raw.text : textOf(body)
   };
   if (unsubscribe) msg.headers = { 'List-Unsubscribe': `<${unsubscribe}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' };
   try {
@@ -110,17 +110,16 @@ export async function mailRsvp(env, { event, org, guest }) {
 }
 // A message from the organizer to the guests of one event (the address, the door time…)
 export async function mailMessage(env, { event, org, guest, subject, text }) {
+  // A plain, ordinary-looking email: the organizer's words, nothing else designed around them
   const link = `${appUrl(env)}${evPath(org.handle, event)}` + (guest.token ? `?t=${encodeURIComponent(guest.token)}` : '');
-  const paras = String(text).split(/\n{2,}/).map((p) => esc(p).replace(/\n/g, '<br>'));
+  const foot = `You receive this because you are on the guestlist of ${event.title}.\nYour invitation: ${link}`;
+  const auto = (t) => esc(t).replace(/https?:\/\/[^\s<]+/g, (u) => `<a href="${u}">${u}</a>`).replace(/\n/g, '<br>');
   return send(env, {
     to: guest.email, fromHandle: org.handle, fromName: org.name, kind: 'message', event_id: event.id, org_id: org.id,
     subject,
-    body: {
-      kicker: esc(event.title) + (when(event) ? ' · ' + esc(when(event)) : ''),
-      title: esc(subject),
-      lines: paras,
-      button: { label: 'See the invitation', href: link },
-      footer: `${esc(org.name)} wrote to the guestlist of ${esc(event.title)} through rsvp.fm. You receive this because you are on it.`
+    raw: {
+      html: `<div>${auto(String(text))}</div><br><div style="color:#888;font-size:12px">--<br>${auto(foot)}</div>`,
+      text: `${text}\n\n--\n${foot}`
     }
   });
 }
