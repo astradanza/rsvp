@@ -562,6 +562,12 @@ async function api(request, env, url, ctx) {
       const text = (typeof b.text === 'string' ? b.text : '').replace(/\r\n/g, '\n').trim().slice(0, 5000);
       if (!subject || !text) fail(400, 'Write a subject and a message.');
       if (!mailEnabled(env)) fail(503, 'Emails are not switched on yet. Turn on Email Sending for rsvp.fm in Cloudflare first.');
+      if (b.test_to) {
+        const to = String(b.test_to).trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to) || to.length > 200) fail(400, 'That test address does not look right.');
+        await mailMessage(env, { event: e, org, guest: { email: to, token: '' }, subject: '[Test] ' + subject, text });
+        return json({ test: to });
+      }
       const guests = (await env.DB.prepare(`SELECT * FROM gl_guests WHERE event_id = ? AND status ${b.audience === 'all' ? "!= 'declined'" : "= 'confirmed'"}`).bind(e.id).all()).results;
       if (!guests.length) fail(400, 'No one to write to yet.');
       await later((async () => {

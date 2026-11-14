@@ -110,7 +110,7 @@ export async function mailRsvp(env, { event, org, guest }) {
 }
 // A message from the organizer to the guests of one event (the address, the door time…)
 export async function mailMessage(env, { event, org, guest, subject, text }) {
-  const link = `${appUrl(env)}${evPath(org.handle, event)}?t=${encodeURIComponent(guest.token)}`;
+  const link = `${appUrl(env)}${evPath(org.handle, event)}` + (guest.token ? `?t=${encodeURIComponent(guest.token)}` : '');
   const paras = String(text).split(/\n{2,}/).map((p) => esc(p).replace(/\n/g, '<br>'));
   return send(env, {
     to: guest.email, fromHandle: org.handle, fromName: org.name, kind: 'message', event_id: event.id, org_id: org.id,

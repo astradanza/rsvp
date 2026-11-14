@@ -468,7 +468,8 @@
       '<label><input type="radio" name="audience" value="all"><span>Everyone on the list (' + nAll + ')</span></label></div>' +
       '<label><span>Subject</span><input name="subject" maxlength="140" required value="' + esc('The address · ' + e.title) + '"></label>' +
       '<label><span>Message</span><textarea name="text" maxlength="5000" required placeholder="The address is… Doors open at… See you there."></textarea></label>' +
-      '<p class="err" hidden></p><div class="acts"><button class="btn small" type="submit">Send</button><span class="quiet small">Sent from ' + esc(org.handle) + '@rsvp.fm</span></div></form></div>';
+      '<p class="err" hidden></p><div class="acts"><button class="btn small" type="submit">Send</button><span class="quiet small">Sent from ' + esc(org.handle) + '@rsvp.fm</span></div>' +
+      '<div class="acts small"><input name="test_to" type="email" value="' + esc(org.email || '') + '" placeholder="you@example.com" style="flex:1;min-width:160px;font-size:16px"><button class="btn small line" type="button" data-act="testmsg">Send a test</button></div></form></div>';
   }
   function invitesBox() {
     var h = '<div class="box"><span class="sc">Unique invitation links</span>' +
@@ -723,6 +724,13 @@
     if (act === 'digest') {
       var q = (document.getElementById('prefs') || {}).getAttribute ? document.getElementById('prefs').getAttribute('data-q') : '';
       api('POST', '/prefs' + (q || ''), { digest: b.value }).then(function (r) { say(r.digest === 'never' ? 'No more invitation emails.' : r.digest === 'weekly' ? 'One email a week, at most.' : 'Saved.'); }).catch(function (e) { say(e.message); });
+      return;
+    }
+    if (act === 'testmsg') {
+      var tf = document.getElementById('f-message'), td = Object.fromEntries(new FormData(tf));
+      if (!td.subject || !td.text || !td.test_to) { say('Write a subject, a message and a test address.'); return; }
+      b.disabled = true;
+      api('POST', '/events/' + current.event.id + '/message', { subject: td.subject, text: td.text, test_to: td.test_to }).then(function (r) { b.disabled = false; say('Test sent to ' + r.test + '.'); }).catch(function (e) { b.disabled = false; say(e.message); });
       return;
     }
     if (act === 'loginas') { go('/login' + (id === 'guest' ? '?as=guest' : ''), true); return; }
