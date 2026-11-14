@@ -138,8 +138,9 @@ async function ensureSchema(env) {
     ['theme', "TEXT NOT NULL DEFAULT 'creme'"], ['visibility', "TEXT NOT NULL DEFAULT 'public'"], ['invite_token', 'TEXT'],
     ['custom_theme', "TEXT NOT NULL DEFAULT ''"], ['v1_user_id', 'INTEGER']
   ]);
-  await addColumns(env, 'gl_guests', [['consent', 'INTEGER NOT NULL DEFAULT 0'], ['names', "TEXT NOT NULL DEFAULT ''"], ['invite_code', 'TEXT']]);
-  await addColumns(env, 'gl_events', [['listed', 'INTEGER NOT NULL DEFAULT 1'], ['slug', 'TEXT'], ['photos', "TEXT NOT NULL DEFAULT '[]'"]]);
+  await addColumns(env, 'gl_guests', [['consent', 'INTEGER NOT NULL DEFAULT 0'], ['names', "TEXT NOT NULL DEFAULT ''"], ['invite_code', 'TEXT'], ['msg_at', "TEXT NOT NULL DEFAULT ''"]]);
+  await addColumns(env, 'gl_events', [['listed', 'INTEGER NOT NULL DEFAULT 1'], ['slug', 'TEXT'], ['photos', "TEXT NOT NULL DEFAULT '[]'"],
+    ['msg_subject', "TEXT NOT NULL DEFAULT ''"], ['msg_text', "TEXT NOT NULL DEFAULT ''"], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['msg_auto', 'INTEGER NOT NULL DEFAULT 0']]);
   await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS gl_orgs_handle ON gl_orgs(handle)').run();
   // guests who RSVP'd before communities existed join their organizer's community (no email consent)
   if (!(await env.DB.prepare('SELECT 1 FROM gl_contacts LIMIT 1').first())) {
@@ -245,6 +246,7 @@ const eventShape = (e) => ({
   id: e.id, title: e.title, starts_at: e.starts_at, ends_at: e.ends_at, venue: e.venue, city: e.city, details: e.details,
   slug: e.slug || '', photos: photosOf(e), plus_max: e.plus_max, auto_confirm: !!e.auto_confirm, open: !!e.open, listed: e.listed == null ? true : !!e.listed, created_at: e.created_at
 });
+const msgShape = (e) => ({ subject: e.msg_subject || '', text: e.msg_text || '', at: e.msg_at || '', auto: !!e.msg_auto });
 const guestShape = (g) => ({ id: g.id, name: g.name, email: g.email, plus: g.plus, names: namesOf(g), invite_code: g.invite_code || '', status: g.status, consent: !!g.consent, created_at: g.created_at, updated_at: g.updated_at });
 // Event photos: a JSON list of /api/img/<id>, the first one is the cover
 const photosOf = (e) => { try { const a = JSON.parse(e.photos || '[]'); return Array.isArray(a) ? a.filter((x) => /^\/api\/img\/[a-z0-9]+$/.test(x)) : []; } catch { return []; } };
@@ -270,8 +272,20 @@ const UPCOMING = `(e.starts_at = '' OR e.starts_at >= strftime('%Y-%m-%dT%H:%M',
 // "You're on the list": by email and on their devices
 async function notifyConfirmed(env, event, org, guest) {
   await mailConfirmed(env, { event, org, guest });
+  await followUp(env, event, org, guest);
   const m = /^\d{4}-(\d{2})-(\d{2})T(\d{2}:\d{2})/.exec(event.starts_at || '');
   await pushTo(env, guest.email, { title: "You're on the list", body: event.title + (m ? ` · ${+m[2]}/${+m[1]} ${m[3]}` : ''), url: (event.slug && org.handle ? '/' + org.handle + '/' + event.slug : '/' + event.id) + '?t=' + encodeURIComponent(guest.token), tag: 'confirm-' + event.id });
+}
+
+// The organizer's last message, sent on its own to whoever is confirmed after it went out
+async function followUp(env, event, org, guest) {
+  if (!event.msg_auto || !event.msg_text || !event.msg_at || !guest || !guest.id || !guest.email) return;
+  const g = await env.DB.prepare('SELECT * FROM gl_guests WHERE id = ?').bind(guest.id).first();
+  if (!g || g.status !== 'confirmed' || g.msg_at === event.msg_at) return;
+  const r = await env.DB.prepare(`UPDATE gl_guests SET msg_at = ? WHERE id = ? AND msg_at != ?`).bind(event.msg_at, g.id, event.msg_at).run();
+  if (!r.meta.changes) return;
+  await mailMessage(env, { event, org, guest: g, subject: event.msg_subject, text: event.msg_text });
+  await pushTo(env, g.email, { title: event.msg_subject, body: event.msg_text.slice(0, 140), url: (event.slug && org.handle ? '/' + org.handle + '/' + event.slug : '/' + event.id) + '?t=' + encodeURIComponent(g.token), tag: 'msg-' + event.id });
 }
 
 async function ownEvent(env, org, id) {
@@ -518,7 +532,7 @@ async function api(request, env, url, ctx) {
       const guests = (await env.DB.prepare('SELECT * FROM gl_guests WHERE event_id = ? ORDER BY created_at, id').bind(e.id).all()).results;
       const invites = (await env.DB.prepare(`SELECT i.*, g.name AS guest_name, g.names AS guest_names FROM gl_invites i LEFT JOIN gl_guests g ON g.id = i.guest_id
         WHERE i.event_id = ? ORDER BY i.created_at DESC`).bind(e.id).all()).results;
-      return json({ event: eventShape(e), guests: guests.map(guestShape),
+      return json({ event: { ...eventShape(e), msg: msgShape(e) }, guests: guests.map(guestShape),
         invites: invites.map((i) => ({ code: i.code, slots: i.slots, label: i.label, used: !!i.guest_id, guest_name: i.guest_name || '', names: namesOf({ names: i.guest_names }), created_at: i.created_at })) });
     }
     if (seg.length === 2 && method === 'PATCH') {
@@ -562,6 +576,11 @@ async function api(request, env, url, ctx) {
       const text = (typeof b.text === 'string' ? b.text : '').replace(/\r\n/g, '\n').trim().slice(0, 5000);
       if (!subject || !text) fail(400, 'Write a subject and a message.');
       if (!mailEnabled(env)) fail(503, 'Emails are not switched on yet. Turn on Email Sending for rsvp.fm in Cloudflare first.');
+      // Stop (or restart) sending the last message to new guests
+      if (b.auto_only) {
+        await env.DB.prepare('UPDATE gl_events SET msg_auto = ? WHERE id = ?').bind(b.auto ? 1 : 0, e.id).run();
+        return json({ auto: !!b.auto });
+      }
       if (b.test_to) {
         const to = String(b.test_to).trim().toLowerCase();
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to) || to.length > 200) fail(400, 'That test address does not look right.');
@@ -570,6 +589,11 @@ async function api(request, env, url, ctx) {
       }
       const guests = (await env.DB.prepare(`SELECT * FROM gl_guests WHERE event_id = ? AND status ${b.audience === 'all' ? "!= 'declined'" : "= 'confirmed'"}`).bind(e.id).all()).results;
       if (!guests.length) fail(400, 'No one to write to yet.');
+      const at = new Date().toISOString();
+      await env.DB.prepare('UPDATE gl_events SET msg_subject = ?, msg_text = ?, msg_at = ?, msg_auto = ? WHERE id = ?').bind(subject, text, at, b.auto ? 1 : 0, e.id).run();
+      // Those already written to (b.already: the message went out before it was kept) are marked so they do not get it twice
+      await env.DB.batch(guests.map((g) => env.DB.prepare('UPDATE gl_guests SET msg_at = ? WHERE id = ?').bind(at, g.id)));
+      if (b.already) return json({ sent: 0, kept: guests.length, auto: !!b.auto });
       await later((async () => {
         for (const g of guests) {
           await mailMessage(env, { event: e, org, guest: g, subject, text });
@@ -764,6 +788,7 @@ async function api(request, env, url, ctx) {
             .bind(e.id, name, email, names.length, names.join('\n'), iv.code, t).first();
           await later(mailRsvp(env, { event: e, org: { id: e.org_id, name: e.org_name, handle: e.org_handle }, guest: { name, email, plus: names.length, status: 'confirmed', token: t } }));
         }
+        await later(followUp(env, e, { id: e.org_id, name: e.org_name, handle: e.org_handle }, g));
         await env.DB.prepare('UPDATE gl_invites SET guest_id = ? WHERE code = ?').bind(g.id, iv.code).run();
         return json({ status: 'confirmed', token: t });
       }
@@ -782,11 +807,13 @@ async function api(request, env, url, ctx) {
       if (prev) {
         const status = prev.status === 'declined' ? prev.status : prev.status === 'confirmed' && plus <= prev.plus ? 'confirmed' : fresh;
         await env.DB.prepare(`UPDATE gl_guests SET name = ?, plus = ?, status = ?, updated_at = datetime('now') WHERE id = ?`).bind(name, plus, status, prev.id).run();
+        if (status === 'confirmed') await later(followUp(env, e, { id: e.org_id, name: e.org_name, handle: e.org_handle }, prev));
         return json({ status, token: prev.token });
       }
       const t = token();
-      await env.DB.prepare('INSERT INTO gl_guests (event_id, name, email, plus, status, token) VALUES (?, ?, ?, ?, ?, ?)').bind(e.id, name, email, plus, fresh, t).run();
-      await later(mailRsvp(env, { event: e, org: { id: e.org_id, name: e.org_name, handle: e.org_handle }, guest: { name, email, plus, status: fresh, token: t } }));
+      const ng = await env.DB.prepare('INSERT INTO gl_guests (event_id, name, email, plus, status, token) VALUES (?, ?, ?, ?, ?, ?) RETURNING *').bind(e.id, name, email, plus, fresh, t).first();
+      const eo = { id: e.org_id, name: e.org_name, handle: e.org_handle };
+      await later((async () => { await mailRsvp(env, { event: e, org: eo, guest: { name, email, plus, status: fresh, token: t } }); await followUp(env, e, eo, ng); })());
       return json({ status: fresh, token: t }, 201);
     }
   }

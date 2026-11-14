@@ -463,11 +463,14 @@
     var nAll = current.guests.filter(function (g) { return g.status !== 'declined'; }).length;
     if (!nAll) return '';
     if (!mailOn) return '<div class="box"><span class="sc">Write to your guests</span><p class="quiet small">Emails are not switched on yet. Once Email Sending is on for rsvp.fm in Cloudflare, you can send the address or any news to everyone on the list from here.</p></div>';
-    return '<div class="box"><span class="sc">Write to your guests</span>' +
+    var m = e.msg || {}, auto = m.auto && m.text ? '<p class="small">Sent on its own to every new confirmed guest: <b>' + esc(m.subject) + '</b> · <button class="link small" data-act="stopauto">Stop</button></p>' :
+      m.text ? '<p class="quiet small">Last message: ' + esc(m.subject) + ' · <button class="link small" data-act="startauto">Send it to new guests too</button></p>' : '';
+    return '<div class="box"><span class="sc">Write to your guests</span>' + auto +
       '<form id="f-message" data-confirm="0"><div class="seg"><label><input type="radio" name="audience" value="confirmed" checked><span>Confirmed (' + nConf + ')</span></label>' +
       '<label><input type="radio" name="audience" value="all"><span>Everyone on the list (' + nAll + ')</span></label></div>' +
       '<label><span>Subject</span><input name="subject" maxlength="140" required value="' + esc('The address · ' + e.title) + '"></label>' +
       '<label><span>Message</span><textarea name="text" maxlength="5000" required placeholder="The address is… Doors open at… See you there."></textarea></label>' +
+      '<label class="check"><input type="checkbox" name="auto" value="1" checked><span>Also send it to everyone confirmed later</span></label>' +
       '<p class="err" hidden></p><div class="acts"><button class="btn small" type="submit">Send</button><span class="quiet small">Sent from ' + esc(org.handle) + '@rsvp.fm</span></div>' +
       '<div class="acts small"><input name="test_to" type="email" value="' + esc(org.email || '') + '" placeholder="you@example.com" style="flex:1;min-width:160px;font-size:16px"><button class="btn small line" type="button" data-act="testmsg">Send a test</button></div></form></div>';
   }
@@ -726,6 +729,13 @@
       api('POST', '/prefs' + (q || ''), { digest: b.value }).then(function (r) { say(r.digest === 'never' ? 'No more invitation emails.' : r.digest === 'weekly' ? 'One email a week, at most.' : 'Saved.'); }).catch(function (e) { say(e.message); });
       return;
     }
+    if (act === 'stopauto' || act === 'startauto') {
+      var on = act === 'startauto';
+      api('POST', '/events/' + current.event.id + '/message', { auto_only: true, auto: on }).then(function () {
+        current.event.msg.auto = on; say(on ? 'New guests will get it too.' : 'Stopped. New guests will not get it.'); renderManage();
+      }).catch(function (e) { say(e.message); });
+      return;
+    }
     if (act === 'testmsg') {
       var tf = document.getElementById('f-message'), td = Object.fromEntries(new FormData(tf));
       if (!td.subject || !td.text || !td.test_to) { say('Write a subject, a message and a test address.'); return; }
@@ -887,8 +897,9 @@
       if (f.getAttribute('data-confirm') !== '1') {
         f.setAttribute('data-confirm', '1'); btn.disabled = false; btn.textContent = 'Tap again to send to ' + n + (n === 1 ? ' person' : ' people'); return;
       }
-      api('POST', '/events/' + current.event.id + '/message', { audience: d.audience, subject: d.subject, text: d.text }).then(function (r) {
-        say('Sent to ' + r.sent + (r.sent === 1 ? ' guest.' : ' guests.')); renderManage();
+      api('POST', '/events/' + current.event.id + '/message', { audience: d.audience, subject: d.subject, text: d.text, auto: !!d.auto }).then(function (r) {
+        say('Sent to ' + r.sent + (r.sent === 1 ? ' guest.' : ' guests.') + (d.auto ? ' New guests will get it too.' : ''));
+        current.event.msg = { subject: d.subject, text: d.text, auto: !!d.auto, at: new Date().toISOString() }; renderManage();
       }).catch(fail);
     } else if (f.id === 'f-keep') {
       var kid = f.getAttribute('data-id');
