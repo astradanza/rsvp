@@ -18,5 +18,6 @@
   ],
   // 16:00 UTC every day: guestlist invitation emails (no-op until email sending is on)
   "triggers": { "crons": ["0 16 * * *"] },
+  "send_email": [{ "name": "EMAIL" }],
   "observability": { "enabled": true }
 }
