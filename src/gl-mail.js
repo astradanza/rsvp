@@ -108,6 +108,22 @@ export async function mailRsvp(env, { event, org, guest }) {
     }
   });
 }
+// A message from the organizer to the guests of one event (the address, the door time…)
+export async function mailMessage(env, { event, org, guest, subject, text }) {
+  const link = `${appUrl(env)}${evPath(org.handle, event)}?t=${encodeURIComponent(guest.token)}`;
+  const paras = String(text).split(/\n{2,}/).map((p) => esc(p).replace(/\n/g, '<br>'));
+  return send(env, {
+    to: guest.email, fromHandle: org.handle, fromName: org.name, kind: 'message', event_id: event.id, org_id: org.id,
+    subject,
+    body: {
+      kicker: esc(event.title) + (when(event) ? ' · ' + esc(when(event)) : ''),
+      title: esc(subject),
+      lines: paras,
+      button: { label: 'See the invitation', href: link },
+      footer: `${esc(org.name)} wrote to the guestlist of ${esc(event.title)} through rsvp.fm. You receive this because you are on it.`
+    }
+  });
+}
 export async function mailConfirmed(env, { event, org, guest }) {
   return mailRsvp(env, { event, org, guest: { ...guest, status: 'confirmed' } });
 }

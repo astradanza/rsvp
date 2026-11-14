@@ -4,7 +4,7 @@
 // can opt in to the organizer's next invitations and keep a guest account to receive them here.
 // Own tables (gl_*), own sessions, own static app (public/gl/).
 
-import { mailEnabled, mailRsvp, mailConfirmed, sendDigests, prefsFor } from './gl-mail.js';
+import { mailEnabled, mailRsvp, mailConfirmed, mailMessage, sendDigests, prefsFor } from './gl-mail.js';
 import { migrateV1 } from './gl-migrate.js';
 import { vapidKeys, validSubscription, pushTo } from './gl-push.js';
 
@@ -554,6 +554,23 @@ async function api(request, env, url, ctx) {
       const r = await env.DB.prepare('DELETE FROM gl_invites WHERE code = ? AND event_id = ? AND guest_id IS NULL').bind(seg[3], e.id).run();
       if (!r.meta.changes) fail(409, 'This link has already been used: remove the guest from the list instead.');
       return json({ ok: true });
+    }
+    // Email (and push) a message to the guests: confirmed only, or everyone on the list
+    if (seg[2] === 'message' && method === 'POST') {
+      const b = await body(request);
+      const subject = str(b.subject, 140);
+      const text = (typeof b.text === 'string' ? b.text : '').replace(/\r\n/g, '\n').trim().slice(0, 5000);
+      if (!subject || !text) fail(400, 'Write a subject and a message.');
+      if (!mailEnabled(env)) fail(503, 'Emails are not switched on yet. Turn on Email Sending for rsvp.fm in Cloudflare first.');
+      const guests = (await env.DB.prepare(`SELECT * FROM gl_guests WHERE event_id = ? AND status ${b.audience === 'all' ? "!= 'declined'" : "= 'confirmed'"}`).bind(e.id).all()).results;
+      if (!guests.length) fail(400, 'No one to write to yet.');
+      await later((async () => {
+        for (const g of guests) {
+          await mailMessage(env, { event: e, org, guest: g, subject, text });
+          await pushTo(env, g.email, { title: subject, body: text.slice(0, 140), url: (e.slug ? '/' + org.handle + '/' + e.slug : '/' + e.id) + '?t=' + encodeURIComponent(g.token), tag: 'msg-' + e.id });
+        }
+      })());
+      return json({ sent: guests.length });
     }
     if (seg[2] === 'confirm-all' && method === 'POST') {
       const waiting = (await env.DB.prepare(`SELECT * FROM gl_guests WHERE event_id = ? AND status = 'requested'`).bind(e.id).all()).results;

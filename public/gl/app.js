@@ -433,7 +433,7 @@
       '<div class="acts"><button class="btn small" data-act="copylink" data-id="' + esc(url) + '">Copy link</button>' +
       (navigator.share ? '<button class="btn small line" data-act="sharelink" data-id="' + esc(url) + '">Share…</button>' : '') +
       '<a class="btn small line" href="' + esc(eventPath(e, org.handle)) + '" target="_blank" rel="noopener">View page</a></div></div>' +
-      invitesBox() +
+      invitesBox() + messageBox() +
       '<div class="stats"><div class="stat"><b>' + c.requests + '</b><span>Requests</span></div><div class="stat"><b>' + c.people + '</b><span>People</span></div>' +
       '<div class="stat"><b>' + c.confirmed + '</b><span>Confirmed</span></div></div>' +
       '<div class="toolbar"><div class="seg" style="min-width:200px"><label><input type="radio" name="sort" value="arrival"' + (current.sort === 'arrival' ? ' checked' : '') + ' data-act="sort"><span>By arrival</span></label>' +
@@ -457,6 +457,19 @@
   }
   // Unique links: "you've been invited to register N names on the guestlist"
   function inviteUrl(code) { return pageUrl(current.event, org.handle) + '?inv=' + code; }
+  // Write to the guests: the address, the door time… by email (and notification)
+  function messageBox() {
+    var e = current.event, nConf = current.guests.filter(function (g) { return g.status === 'confirmed'; }).length;
+    var nAll = current.guests.filter(function (g) { return g.status !== 'declined'; }).length;
+    if (!nAll) return '';
+    if (!mailOn) return '<div class="box"><span class="sc">Write to your guests</span><p class="quiet small">Emails are not switched on yet. Once Email Sending is on for rsvp.fm in Cloudflare, you can send the address or any news to everyone on the list from here.</p></div>';
+    return '<div class="box"><span class="sc">Write to your guests</span>' +
+      '<form id="f-message" data-confirm="0"><div class="seg"><label><input type="radio" name="audience" value="confirmed" checked><span>Confirmed (' + nConf + ')</span></label>' +
+      '<label><input type="radio" name="audience" value="all"><span>Everyone on the list (' + nAll + ')</span></label></div>' +
+      '<label><span>Subject</span><input name="subject" maxlength="140" required value="' + esc('The address · ' + e.title) + '"></label>' +
+      '<label><span>Message</span><textarea name="text" maxlength="5000" required placeholder="The address is… Doors open at… See you there."></textarea></label>' +
+      '<p class="err" hidden></p><div class="acts"><button class="btn small" type="submit">Send</button><span class="quiet small">Sent from ' + esc(org.handle) + '@rsvp.fm</span></div></form></div>';
+  }
   function invitesBox() {
     var h = '<div class="box"><span class="sc">Unique invitation links</span>' +
       '<p class="quiet small">One link for one guest, who registers up to the number of names you choose. Confirmed right away.</p>' +
@@ -860,6 +873,14 @@
       var pid = f.getAttribute('data-id');
       api('POST', '/people/signup', { event: pid, t: tokenFor(pid), password: d.password }).then(function (j) {
         person = j.person; say('Done. Your next invitations will be waiting here.'); viewGuest(pid);
+      }).catch(fail);
+    } else if (f.id === 'f-message') {
+      var n = d.audience === 'all' ? current.guests.filter(function (g) { return g.status !== 'declined'; }).length : current.guests.filter(function (g) { return g.status === 'confirmed'; }).length;
+      if (f.getAttribute('data-confirm') !== '1') {
+        f.setAttribute('data-confirm', '1'); btn.disabled = false; btn.textContent = 'Tap again to send to ' + n + (n === 1 ? ' person' : ' people'); return;
+      }
+      api('POST', '/events/' + current.event.id + '/message', { audience: d.audience, subject: d.subject, text: d.text }).then(function (r) {
+        say('Sent to ' + r.sent + (r.sent === 1 ? ' guest.' : ' guests.')); renderManage();
       }).catch(fail);
     } else if (f.id === 'f-keep') {
       var kid = f.getAttribute('data-id');
