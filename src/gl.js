@@ -30,9 +30,12 @@ const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,29}$/;
 
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
 const fail = (status, message) => { throw new HttpError(status, message); };
-const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), {
-  status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers }
-});
+// headers: a value can be a list (several set-cookie)
+const json = (data, status = 200, headers = {}) => {
+  const h = new Headers({ 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+  for (const [k, v] of Object.entries(headers)) { if (Array.isArray(v)) v.forEach((x) => h.append(k, x)); else h.set(k, v); }
+  return new Response(JSON.stringify(data), { status, headers: h });
+};
 async function body(request) {
   if (!(request.headers.get('content-type') || '').includes('application/json')) fail(415, 'Send JSON.');
   try { return await request.json(); } catch { fail(400, 'Invalid JSON.'); }
@@ -129,6 +132,11 @@ async function ensureSchema(env) {
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_push (endpoint TEXT PRIMARY KEY, email TEXT NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
     env.DB.prepare('CREATE INDEX IF NOT EXISTS gl_push_email ON gl_push(email)'),
+    // Updates organizers post on an event page (optionally emailed to the guests)
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_updates (id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL REFERENCES gl_events(id) ON DELETE CASCADE,
+      text TEXT NOT NULL DEFAULT '', photo TEXT NOT NULL DEFAULT '', guests_only INTEGER NOT NULL DEFAULT 0, emailed INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS gl_updates_event ON gl_updates(event_id)'),
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_images (id TEXT PRIMARY KEY,
       org_id INTEGER NOT NULL REFERENCES gl_orgs(id) ON DELETE CASCADE, mime TEXT NOT NULL, data BLOB NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now')))`)
@@ -140,7 +148,7 @@ async function ensureSchema(env) {
   ]);
   await addColumns(env, 'gl_guests', [['consent', 'INTEGER NOT NULL DEFAULT 0'], ['names', "TEXT NOT NULL DEFAULT ''"], ['invite_code', 'TEXT'], ['msg_at', "TEXT NOT NULL DEFAULT ''"]]);
   await addColumns(env, 'gl_events', [['listed', 'INTEGER NOT NULL DEFAULT 1'], ['slug', 'TEXT'], ['photos', "TEXT NOT NULL DEFAULT '[]'"],
-    ['msg_subject', "TEXT NOT NULL DEFAULT ''"], ['msg_text', "TEXT NOT NULL DEFAULT ''"], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['msg_auto', 'INTEGER NOT NULL DEFAULT 0']]);
+    ['msg_subject', "TEXT NOT NULL DEFAULT ''"], ['msg_text', "TEXT NOT NULL DEFAULT ''"], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['msg_auto', 'INTEGER NOT NULL DEFAULT 0'], ['msg_photo', "TEXT NOT NULL DEFAULT ''"]]);
   await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS gl_orgs_handle ON gl_orgs(handle)').run();
   // guests who RSVP'd before communities existed join their organizer's community (no email consent)
   if (!(await env.DB.prepare('SELECT 1 FROM gl_contacts LIMIT 1').first())) {
@@ -204,10 +212,23 @@ async function currentPerson(request, env) {
   if (!t) return null;
   return env.DB.prepare(`SELECT p.* FROM gl_psessions s JOIN gl_people p ON p.id = s.person_id WHERE s.token = ? AND s.expires_at > datetime('now')`).bind(t).first();
 }
-async function startSession(env, orgId, url) {
+// Several organizer accounts can be signed in on one device: gsids keeps them all, gsid is the one in use.
+const TOKEN_RE = /^[A-Za-z0-9_-]{20,64}$/;
+function orgTokens(request) {
+  const list = (cookie(request, 'gsids') || '').split('.').filter((t) => TOKEN_RE.test(t));
+  const cur = cookie(request, 'gsid');
+  if (cur && TOKEN_RE.test(cur) && !list.includes(cur)) list.push(cur);
+  return list.slice(-8);
+}
+const tokensCookie = (list, url) => makeCookie('gsids', list.join('.'), url, list.length ? SESSION_DAYS * 86400 : 0);
+async function startSession(env, orgId, url, request) {
   const t = token();
   await env.DB.prepare(`INSERT INTO gl_sessions (token, org_id, expires_at) VALUES (?, ?, datetime('now', '+${SESSION_DAYS} days'))`).bind(t, orgId).run();
-  return makeCookie('gsid', t, url, SESSION_DAYS * 86400);
+  const prev = request ? orgTokens(request) : [];
+  // the same organizer logging in again replaces their older session in the list
+  const same = prev.length ? (await env.DB.prepare(`SELECT token FROM gl_sessions WHERE org_id = ? AND token IN (${prev.map(() => '?').join(',')})`).bind(orgId, ...prev).all()).results.map((r) => r.token) : [];
+  const list = prev.filter((x) => !same.includes(x)).concat(t);
+  return [makeCookie('gsid', t, url, SESSION_DAYS * 86400), tokensCookie(list, url)];
 }
 async function startPersonSession(env, personId, url) {
   const t = token();
@@ -246,6 +267,7 @@ const eventShape = (e) => ({
   id: e.id, title: e.title, starts_at: e.starts_at, ends_at: e.ends_at, venue: e.venue, city: e.city, details: e.details,
   slug: e.slug || '', photos: photosOf(e), plus_max: e.plus_max, auto_confirm: !!e.auto_confirm, open: !!e.open, listed: e.listed == null ? true : !!e.listed, created_at: e.created_at
 });
+const updateShape = (u) => ({ id: u.id, text: u.text, photo: u.photo || '', guests_only: !!u.guests_only, emailed: !!u.emailed, created_at: u.created_at });
 const msgShape = (e) => ({ subject: e.msg_subject || '', text: e.msg_text || '', at: e.msg_at || '', auto: !!e.msg_auto });
 const guestShape = (g) => ({ id: g.id, name: g.name, email: g.email, plus: g.plus, names: namesOf(g), invite_code: g.invite_code || '', status: g.status, consent: !!g.consent, created_at: g.created_at, updated_at: g.updated_at });
 // Event photos: a JSON list of /api/img/<id>, the first one is the cover
@@ -284,7 +306,7 @@ async function followUp(env, event, org, guest) {
   if (!g || g.status !== 'confirmed' || g.msg_at === event.msg_at) return;
   const r = await env.DB.prepare(`UPDATE gl_guests SET msg_at = ? WHERE id = ? AND msg_at != ?`).bind(event.msg_at, g.id, event.msg_at).run();
   if (!r.meta.changes) return;
-  await mailMessage(env, { event, org, guest: g, subject: event.msg_subject, text: event.msg_text });
+  await mailMessage(env, { event, org, guest: g, subject: event.msg_subject, text: event.msg_text, photo: event.msg_photo || '' });
   await pushTo(env, g.email, { title: event.msg_subject, body: event.msg_text.slice(0, 140), url: (event.slug && org.handle ? '/' + org.handle + '/' + event.slug : '/' + event.id) + '?t=' + encodeURIComponent(g.token), tag: 'msg-' + event.id });
 }
 
@@ -385,7 +407,7 @@ async function api(request, env, url, ctx) {
     if (await env.DB.prepare('SELECT 1 FROM gl_orgs WHERE email = ?').bind(email).first()) fail(409, 'An account already uses this email. Log in instead.');
     const o = await env.DB.prepare('INSERT INTO gl_orgs (email, password_hash, name, kind, handle, invite_token) VALUES (?, ?, ?, ?, ?, ?) RETURNING *')
       .bind(email, await hashPassword(password), name, KINDS.includes(b.kind) ? b.kind : 'promoter', await freeHandle(env, name), code(12)).first();
-    return json({ org: orgShape(o) }, 201, { 'set-cookie': await startSession(env, o.id, url) });
+    return json({ org: orgShape(o) }, 201, { 'set-cookie': await startSession(env, o.id, url, request) });
   }
   // One login for everyone: an organizer (email or handle) first, then a guest account.
   if (path === '/api/login' && method === 'POST') {
@@ -393,9 +415,9 @@ async function api(request, env, url, ctx) {
     const id = str(b.email || b.login, 160).toLowerCase().replace(/^@/, '');
     const password = String(b.password || '');
     const o = await env.DB.prepare('SELECT * FROM gl_orgs WHERE email = ? OR handle = ?').bind(id, id).first();
-    if (o && await verifyPassword(password, o.password_hash)) return json({ org: orgShape(o) }, 200, { 'set-cookie': await startSession(env, o.id, url) });
+    if (o && await verifyPassword(password, o.password_hash)) return json({ org: orgShape(o) }, 200, { 'set-cookie': await startSession(env, o.id, url, request) });
     const p = await env.DB.prepare('SELECT * FROM gl_people WHERE email = ?').bind(id).first();
-    if (p && await verifyPassword(password, p.password_hash)) return json({ person: personShape(p) }, 200, { 'set-cookie': await startPersonSession(env, p.id, url) });
+    if (p && await verifyPassword(password, p.password_hash)) return json({ person: personShape(p) }, 200, { 'set-cookie': [await startPersonSession(env, p.id, url), makeCookie('gsid', '', url, 0), tokensCookie(orgTokens(request), url)] });
     fail(401, 'Wrong email or password.');
   }
   // Old personal invite links (rsvp.fm/i/code) lead to the page of whoever sent them
@@ -403,10 +425,34 @@ async function api(request, env, url, ctx) {
     const r = await env.DB.prepare(`SELECT o.handle FROM users u JOIN gl_orgs o ON o.v1_user_id = u.id WHERE u.invite_link = ?`).bind(String(seg[1]).toLowerCase()).first().catch(() => null);
     return json({ handle: r ? r.handle : null });
   }
+  // Log out of the account in use; the other accounts on this device stay signed in
   if (path === '/api/logout' && method === 'POST') {
     const t = cookie(request, 'gsid');
     if (t) await env.DB.prepare('DELETE FROM gl_sessions WHERE token = ?').bind(t).run();
-    return json({ ok: true }, 200, { 'set-cookie': makeCookie('gsid', '', url, 0) });
+    return json({ ok: true }, 200, { 'set-cookie': [makeCookie('gsid', '', url, 0), tokensCookie(orgTokens(request).filter((x) => x !== t), url)] });
+  }
+  // Every account signed in on this device: organizer accounts, and the guest profile
+  if (path === '/api/accounts' && method === 'GET') {
+    const list = orgTokens(request);
+    const rows = list.length ? (await env.DB.prepare(`SELECT s.token, o.id, o.name, o.handle, o.logo FROM gl_sessions s JOIN gl_orgs o ON o.id = s.org_id
+      WHERE s.expires_at > datetime('now') AND s.token IN (${list.map(() => '?').join(',')})`).bind(...list).all()).results : [];
+    const seen = new Set(), accounts = [];
+    for (const r of rows) if (!seen.has(r.id)) { seen.add(r.id); accounts.push({ type: 'org', handle: r.handle, name: r.name, logo: r.logo || '', active: !!org && org.id === r.id }); }
+    if (person) accounts.push({ type: 'guest', name: person.name, email: person.email, active: !org });
+    return json({ accounts });
+  }
+  if (path === '/api/switch' && method === 'POST') {
+    const b = await body(request);
+    const list = orgTokens(request);
+    if (b.guest) {
+      if (!person) fail(400, 'No guest profile on this device.');
+      return json({ org: null, person: personShape(person) }, 200, { 'set-cookie': [makeCookie('gsid', '', url, 0), tokensCookie(list, url)] });
+    }
+    const handle = str(b.handle, 40).toLowerCase();
+    const r = list.length ? await env.DB.prepare(`SELECT s.token, o.* FROM gl_sessions s JOIN gl_orgs o ON o.id = s.org_id
+      WHERE s.expires_at > datetime('now') AND o.handle = ? AND s.token IN (${list.map(() => '?').join(',')})`).bind(handle, ...list).first() : null;
+    if (!r) fail(404, 'That account is not signed in on this device. Log in to it.');
+    return json({ org: orgShape(r), person: person ? personShape(person) : null }, 200, { 'set-cookie': [makeCookie('gsid', r.token, url, SESSION_DAYS * 86400), tokensCookie(list, url)] });
   }
   if (path === '/api/me' && method === 'PATCH') {
     need();
@@ -532,7 +578,8 @@ async function api(request, env, url, ctx) {
       const guests = (await env.DB.prepare('SELECT * FROM gl_guests WHERE event_id = ? ORDER BY created_at, id').bind(e.id).all()).results;
       const invites = (await env.DB.prepare(`SELECT i.*, g.name AS guest_name, g.names AS guest_names FROM gl_invites i LEFT JOIN gl_guests g ON g.id = i.guest_id
         WHERE i.event_id = ? ORDER BY i.created_at DESC`).bind(e.id).all()).results;
-      return json({ event: { ...eventShape(e), msg: msgShape(e) }, guests: guests.map(guestShape),
+      const updates = (await env.DB.prepare('SELECT * FROM gl_updates WHERE event_id = ? ORDER BY id DESC').bind(e.id).all()).results;
+      return json({ event: { ...eventShape(e), msg: msgShape(e), updates: updates.map(updateShape) }, guests: guests.map(guestShape),
         invites: invites.map((i) => ({ code: i.code, slots: i.slots, label: i.label, used: !!i.guest_id, guest_name: i.guest_name || '', names: namesOf({ names: i.guest_names }), created_at: i.created_at })) });
     }
     if (seg.length === 2 && method === 'PATCH') {
@@ -567,6 +614,45 @@ async function api(request, env, url, ctx) {
     if (seg[2] === 'invites' && seg[3] && method === 'DELETE') {
       const r = await env.DB.prepare('DELETE FROM gl_invites WHERE code = ? AND event_id = ? AND guest_id IS NULL').bind(seg[3], e.id).run();
       if (!r.meta.changes) fail(409, 'This link has already been used: remove the guest from the list instead.');
+      return json({ ok: true });
+    }
+    // Updates: posted on the event page; emailed (and pushed) to the guests only when asked
+    if (seg[2] === 'updates' && !seg[3] && method === 'POST') {
+      const b = await body(request);
+      const text = (typeof b.text === 'string' ? b.text : '').replace(/\r\n/g, '\n').trim().slice(0, 5000);
+      const photo = b.photo ? (await ownPhotos(env, org, [b.photo]))[0] || '' : '';
+      if (!text && !photo) fail(400, 'Write something or add a photo.');
+      const subject = str(b.subject, 140) || 'Update · ' + e.title;
+      if (b.email && !mailEnabled(env)) fail(503, 'Emails are not switched on yet.');
+      if (b.test_to) {
+        const to = String(b.test_to).trim().toLowerCase();
+        if (!EMAIL_RE.test(to)) fail(400, 'That test address does not look right.');
+        await mailMessage(env, { event: e, org, guest: { email: to, token: '' }, subject: '[Test] ' + subject, text, photo });
+        return json({ test: to });
+      }
+      const u = await env.DB.prepare('INSERT INTO gl_updates (event_id, text, photo, guests_only, emailed) VALUES (?, ?, ?, ?, ?) RETURNING *')
+        .bind(e.id, text, photo, b.guests_only ? 1 : 0, b.email ? 1 : 0).first();
+      let sent = 0;
+      if (b.email) {
+        const guests = (await env.DB.prepare(`SELECT * FROM gl_guests WHERE event_id = ? AND status = 'confirmed'`).bind(e.id).all()).results;
+        const at = new Date().toISOString();
+        await env.DB.prepare('UPDATE gl_events SET msg_subject = ?, msg_text = ?, msg_photo = ?, msg_at = ?, msg_auto = ? WHERE id = ?').bind(subject, text, photo, at, b.auto ? 1 : 0, e.id).run();
+        if (guests.length) await env.DB.batch(guests.map((g) => env.DB.prepare('UPDATE gl_guests SET msg_at = ? WHERE id = ?').bind(at, g.id)));
+        sent = guests.length;
+        await later((async () => {
+          for (const g of guests) {
+            await mailMessage(env, { event: e, org, guest: g, subject, text, photo });
+            await pushTo(env, g.email, { title: subject, body: text.slice(0, 140) || 'New photo', url: (e.slug ? '/' + org.handle + '/' + e.slug : '/' + e.id) + '?t=' + encodeURIComponent(g.token), tag: 'msg-' + e.id });
+          }
+        })());
+      }
+      return json({ update: updateShape(u), sent });
+    }
+    if (seg[2] === 'updates' && seg[3] && method === 'DELETE') {
+      const u = await env.DB.prepare('SELECT * FROM gl_updates WHERE id = ? AND event_id = ?').bind(Number(seg[3]), e.id).first();
+      if (!u) fail(404, 'That update is gone.');
+      await env.DB.prepare('DELETE FROM gl_updates WHERE id = ?').bind(u.id).run();
+      if (u.photo && u.photo !== e.msg_photo && !photosOf(e).includes(u.photo)) await dropPhotos(env, org, [u.photo]);
       return json({ ok: true });
     }
     // Email (and push) a message to the guests: confirmed only, or everyone on the list
@@ -737,8 +823,10 @@ async function api(request, env, url, ctx) {
         if (owner && (!mine || mine.id !== owner.id) && t && owner.token === t) mine = owner;
         invite = { code: iv.code, slots: iv.slots, used: !!iv.guest_id, mine: !!owner && !!mine && owner.id === mine.id };
       }
+      const insider = (mine && mine.status === 'confirmed') || (org && org.id === e.org_id);
+      const updates = (await env.DB.prepare(`SELECT * FROM gl_updates WHERE event_id = ? ${insider ? '' : 'AND guests_only = 0'} ORDER BY id DESC LIMIT 50`).bind(e.id).all()).results;
       return json({
-        event: shape, invite,
+        event: { ...shape, updates: updates.map(updateShape) }, invite,
         mine: mine ? { name: mine.name, email: mine.email, plus: mine.plus, names: namesOf(mine), invite_code: mine.invite_code || '', status: mine.status, consent: !!mine.consent, has_account: !!person || !!(await env.DB.prepare('SELECT 1 FROM gl_people WHERE email = ?').bind(mine.email).first()) } : null,
         person: person ? personShape(person) : null
       });

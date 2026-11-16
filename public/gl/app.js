@@ -61,23 +61,15 @@
       '--line': mix(c.ink, c.paper, 0.84), '--accent': c.accent, '--ok': c.accent, '--display': fontStack(c.display), '--text': fontStack(c.text) };
   }
   // theme(name) for guest-facing pages (unknown names fall back to the default); theme('') for the back office.
-  function theme(t, custom) {
+  // One look everywhere: black, Helvetica bold, LCD mono (the organizer's theme choice is gone)
+  function theme() {
     var body = document.body;
     CUSTOM_VARS.forEach(function (v) { body.style.removeProperty(v); });
     body.removeAttribute('data-plain');
-    if (t === 'custom' && custom) {
-      var vars = customVars(custom);
-      Object.keys(vars).forEach(function (k) { body.style.setProperty(k, vars[k]); });
-      loadFont(custom.display); loadFont(custom.text);
-      body.setAttribute('data-theme', 'custom');
-      if (!(FONTS[custom.text] || {}).mono) body.setAttribute('data-plain', '1');
-    } else {
-      if (t !== '') t = THEMES[t] ? t : DEFAULT_THEME;
-      // '' = the back office and rsvp.fm's own pages: black, Helvetica bold, LCD mono
-      if (t) { loadFonts(t); body.setAttribute('data-theme', t); } else { loadFont('Share Tech Mono'); body.setAttribute('data-theme', 'house'); }
-    }
-    var m = document.querySelector('meta[name=theme-color]'); if (m) m.setAttribute('content', t === 'custom' && custom ? custom.paper : t ? THEMES[t].paper : '#000000');
+    loadFont('Share Tech Mono'); body.setAttribute('data-theme', 'house');
+    var m = document.querySelector('meta[name=theme-color]'); if (m) m.setAttribute('content', '#000000');
   }
+
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function api(method, path, data) {
@@ -144,8 +136,28 @@
     else if (org) h += '<nav class="nav"><a href="/" data-nav="events">Events</a><a href="/community" data-nav="community">Community</a><a href="/account" data-nav="account">Page</a></nav>';
     else if (person) h += '<nav class="nav"><a href="/me" data-nav="me">My invitations</a></nav>';
     else h += '<nav class="nav"><a href="/login">Log in</a></nav>';
-    hdr.innerHTML = h;
-    if (kind !== 'guest') theme('');
+    // The account in use; tap to switch to another one signed in on this device
+    var who = org ? org.name : person ? person.name : '';
+    if (who) h = h.replace(/<\/nav>$/, '') + (/<\/nav>$/.test(h) ? '' : '<nav class="nav">') + '<button class="acct-btn" data-act="accounts" aria-label="Switch account" title="' + esc(who) + '">' +
+      (org && org.logo ? '<img src="' + esc(org.logo) + '" alt="">' : esc(who.trim().charAt(0).toUpperCase())) + '</button></nav>';
+    hdr.innerHTML = h + '<div id="acct-menu" class="acct-menu" hidden></div>';
+    theme();
+  }
+  function accountsMenu() {
+    var m = document.getElementById('acct-menu'); if (!m) return;
+    if (!m.hidden) { m.hidden = true; return; }
+    m.innerHTML = '<p class="quiet small">Loading…</p>'; m.hidden = false;
+    api('GET', '/accounts').then(function (j) {
+      m.innerHTML = '<span class="sc">Accounts on this device</span>' + j.accounts.map(function (a) {
+        var key = a.type === 'guest' ? 'guest' : a.handle;
+        return '<button class="acct-row' + (a.active ? ' on' : '') + '" data-act="switchacct" data-id="' + esc(key) + '">' +
+          '<span class="acct-av">' + (a.logo ? '<img src="' + esc(a.logo) + '" alt="">' : esc(String(a.name || '?').charAt(0).toUpperCase())) + '</span>' +
+          '<span class="acct-t"><b>' + esc(a.name) + '</b><small>' + (a.type === 'guest' ? 'Guest · ' + esc(a.email) : '@' + esc(a.handle)) + '</small></span>' +
+          '<span class="switch' + (a.active ? ' on' : '') + '" aria-hidden="true"><i></i></span></button>';
+      }).join('') +
+        '<div class="acts small"><a class="link small" href="/login?add=1">Add an account</a>' +
+        (org ? '<button class="link small" data-act="logout">Log out of ' + esc(org.name) + '</button>' : person ? '<button class="link small" data-act="plogout">Log out</button>' : '') + '</div>';
+    }).catch(function (e) { m.innerHTML = '<p class="err small">' + esc(e.message) + '</p>'; });
   }
   function setNav(name) { Array.prototype.forEach.call(hdr.querySelectorAll('[data-nav]'), function (a) { a.classList.toggle('on', a.getAttribute('data-nav') === name); }); }
   function loading() { main.innerHTML = '<p class="quiet center">Loading…</p>'; }
@@ -161,7 +173,7 @@
       '<div class="acts"><a class="btn" href="/signup">Create an account</a><a class="btn line" href="/login">Log in</a></div>' +
       '<hr class="rule">' +
       '<div class="stack">' +
-      '<div><h2><em>i.</em> Your page</h2><p class="quiet">Your logo, a few words, a theme of your own. Public, or private: by invitation only.</p></div>' +
+      '<div><h2><em>i.</em> Your page</h2><p class="quiet">Your logo and a few words. Public, or private: by invitation only.</p></div>' +
       '<div><h2><em>ii.</em> Your guestlists</h2><p class="quiet">A name, a date, a place. Guests write their full name and email, bring a +1, +2 or +3 if you allow it, and RSVP.</p></div>' +
       '<div><h2><em>iii.</em> Your community</h2><p class="quiet">Everyone who RSVPs can ask to be kept posted. Next time, they hear from you first.</p></div>' +
       '</div></div>';
@@ -184,7 +196,7 @@
   }
   function viewLogin() {
     header();
-    main.innerHTML = '<div class="stack lg"><div class="stack"><p class="sc">Organizers &amp; guests</p><h1>Log in</h1></div>' +
+    main.innerHTML = '<div class="stack lg"><div class="stack"><p class="sc">Organizers &amp; guests</p><h1>' + (/[?&]add=1/.test(location.search) && (org || person) ? 'Add an account' : 'Log in') + '</h1></div>' +
       '<form id="f-login"><label><span>Email or handle</span><input name="email" required autocomplete="username" autocapitalize="none"></label>' +
       '<label><span>Password</span><input name="password" type="password" required autocomplete="current-password"></label>' +
       '<p class="err" id="err" hidden></p><button class="btn wide" type="submit">Log in</button></form>' +
@@ -193,62 +205,12 @@
   }
 
   // ---------- organizer: page settings ----------
-  function swatch(paper, ink, d, t, name, sub) {
-    return '<span class="sw" style="background:' + paper + ';color:' + ink + '"><b style="font-family:' + fontStack(d) + '">Aa</b><i style="font-family:' + fontStack(t) + '">' + name + '</i><small style="font-family:' + fontStack(t) + '">' + sub + '</small></span>';
-  }
-  function themeGrid(current, custom) {
-    Object.keys(THEMES).forEach(loadFonts);
-    var c = custom || startCustom(current);
-    return '<div class="themes">' + Object.keys(THEMES).map(function (k) {
-      var t = THEMES[k];
-      return '<label><input type="radio" name="theme" value="' + k + '"' + (current === k ? ' checked' : '') + '>' + swatch(t.paper, t.ink, t.d, t.t, t.name, t.d === t.t ? t.d : t.d.split(' ')[0] + ' · ' + t.t) + '</label>';
-    }).join('') +
-      '<label><input type="radio" name="theme" value="custom"' + (current === 'custom' ? ' checked' : '') + '><span id="sw-custom">' + swatch(c.paper, c.ink, c.display, c.text, 'Custom', 'Your colors, your type') + '</span></label>' +
-      '</div>' + customEditor(c, current === 'custom');
-  }
-  function startCustom(from) {
-    var t = THEMES[from] || THEMES[DEFAULT_THEME];
-    return { paper: t.paper, ink: t.ink, accent: t.accent, display: t.d, text: t.t };
-  }
-  function fontSelect(name, value) {
-    return '<select name="' + name + '" data-custom="1">' + Object.keys(FONTS).map(function (f) { return '<option' + (f === value ? ' selected' : '') + '>' + f + '</option>'; }).join('') + '</select>';
-  }
-  function customEditor(c, open) {
-    return '<div id="custom-ed" class="box"' + (open ? '' : ' hidden') + '><span class="sc">Custom theme</span>' +
-      '<div class="colors">' +
-      '<label><span>Background</span><input type="color" name="c_paper" data-custom="1" value="' + c.paper + '"></label>' +
-      '<label><span>Text</span><input type="color" name="c_ink" data-custom="1" value="' + c.ink + '"></label>' +
-      '<label><span>Accent</span><input type="color" name="c_accent" data-custom="1" value="' + c.accent + '"></label></div>' +
-      '<label><span>Titles</span>' + fontSelect('c_display', c.display) + '</label>' +
-      '<label><span>Text</span>' + fontSelect('c_text', c.text) + '</label>' +
-      '<div class="acts small"><span class="quiet">Start from</span>' + Object.keys(THEMES).map(function (k) { return '<button type="button" class="link small" data-act="customfrom" data-id="' + k + '">' + THEMES[k].name + '</button>'; }).join('') + '</div>' +
-      '<div id="custom-preview"></div></div>';
-  }
-  function readCustom() {
-    var f = document.getElementById('f-account'); if (!f) return null;
-    var v = function (n) { var el = f.elements.namedItem(n); return el ? el.value : ''; };
-    return { paper: v('c_paper'), ink: v('c_ink'), accent: v('c_accent'), display: v('c_display'), text: v('c_text') };
-  }
-  function renderCustomPreview() {
-    var c = readCustom(), el = document.getElementById('custom-preview'); if (!c || !el) return;
-    loadFont(c.display); loadFont(c.text);
-    var vars = customVars(c), ratio = contrast(c.paper, c.ink);
-    el.innerHTML = '<div style="background:' + c.paper + ';color:' + c.ink + ';border:1px solid ' + vars['--line'] + ';padding:22px 18px;display:flex;flex-direction:column;gap:10px;text-align:center">' +
-      '<span style="font:500 11px/1.3 ' + vars['--text'] + ';letter-spacing:.12em;text-transform:uppercase;color:' + vars['--muted'] + '">' + esc(org.name) + ' invites you</span>' +
-      '<span style="font:400 30px/1.1 ' + vars['--display'] + '">Name of the night</span>' +
-      '<span style="font:400 15px/1.4 ' + vars['--text'] + ';color:' + c.accent + '">Saturday 31 October, 23:00</span>' +
-      '<span style="font:400 14px/1.5 ' + vars['--text'] + ';color:' + vars['--muted'] + '">Sunset to sunrise. Dress up.</span>' +
-      '<span style="align-self:center;margin-top:6px;background:' + c.ink + ';color:' + c.paper + ';font:500 12px/1 ' + vars['--text'] + ';letter-spacing:.12em;padding:13px 26px">RSVP</span></div>' +
-      (ratio < 4.5 ? '<p class="err small" style="margin-top:8px">Low contrast between background and text: guests may struggle to read.</p>' : '');
-    var sw = document.getElementById('sw-custom'); if (sw) sw.innerHTML = swatch(c.paper, c.ink, c.display, c.text, 'Custom', 'Your colors, your type');
-  }
-
   function viewAccount() {
     if (!org) return go('/login', true);
     header(); setNav('account');
     var inv = location.origin + '/' + org.handle + '?i=' + org.invite_token;
     main.innerHTML = '<div class="stack lg"><div class="toolbar"><h1>Your page</h1><a class="btn small line" href="/' + esc(org.handle) + '">View</a></div>' +
-      '<div class="stack"><span class="sc">Logo</span><div class="box" style="align-items:center;background:' + (org.custom && org.theme === 'custom' ? org.custom : THEMES[org.theme] || THEMES[DEFAULT_THEME]).paper + ';color:' + (org.custom && org.theme === 'custom' ? org.custom : THEMES[org.theme] || THEMES[DEFAULT_THEME]).ink + '">' + (org.logo ? logoImg(org.logo) : '<p class="quiet small">No logo yet. A square or wide mark on a transparent background looks best.</p>') +
+      '<div class="stack"><span class="sc">Logo</span><div class="box" style="align-items:center">' + (org.logo ? logoImg(org.logo) : '<p class="quiet small">No logo yet. A square or wide mark on a transparent background looks best.</p>') +
       '<div class="acts"><label class="btn small line" style="flex-direction:row;cursor:pointer">' + (org.logo ? 'Replace' : 'Upload a logo') + '<input type="file" id="up-logo" accept="image/png,image/jpeg,image/webp" hidden></label>' +
       (org.logo ? '<button class="link small" data-act="rmlogo">Remove</button>' : '') + '</div></div></div>' +
       '<form id="f-account">' +
@@ -256,7 +218,6 @@
       '<label><span>Name</span><input name="name" maxlength="80" required value="' + esc(org.name) + '"></label>' +
       kindSeg(org.kind) +
       '<label><span>Bio</span><textarea name="bio" maxlength="600" placeholder="A few words about you, your nights, your music.">' + esc(org.bio) + '</textarea></label>' +
-      '<div class="stack" style="gap:8px"><span class="sc" style="font-size:13px">Theme</span>' + themeGrid(org.theme === 'custom' || THEMES[org.theme] ? org.theme : DEFAULT_THEME, org.custom) + '</div>' +
       '<div class="stack" style="gap:8px"><span class="sc" style="font-size:13px">Who can see your events</span><div class="seg">' +
       '<label><input type="radio" name="visibility" value="public"' + (org.visibility !== 'private' ? ' checked' : '') + '><span>Everyone</span></label>' +
       '<label><input type="radio" name="visibility" value="private"' + (org.visibility === 'private' ? ' checked' : '') + '><span>By invitation</span></label></div>' +
@@ -266,7 +227,6 @@
       '<p class="quiet small">Whoever opens it can see your events and join your community, even when your page is by invitation.</p>' +
       '<div class="acts"><button class="btn small" data-act="copylink" data-id="' + esc(inv) + '">Copy link</button><button class="link small" data-act="newinvite">Make a new link</button></div></div>' +
       '<hr class="rule"><p class="quiet small">' + esc(org.email) + ' · <button class="link small" data-act="logout">Log out</button></p></div>';
-    renderCustomPreview();
   }
   // Logos keep their shape and transparency; resized in the browser.
   function prepareLogo(file) {
@@ -458,21 +418,45 @@
   // Unique links: "you've been invited to register N names on the guestlist"
   function inviteUrl(code) { return pageUrl(current.event, org.handle) + '?inv=' + code; }
   // Write to the guests: the address, the door time… by email (and notification)
+  // Links in what organizers write: bare https:// addresses, and [text](https://…)
+  var LINK_RE = /\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
+  function linkify(t) {
+    return esc(t).replace(LINK_RE, function (all, label, href, bare) {
+      if (href) return '<a href="' + href + '" target="_blank" rel="noopener">' + label + '</a>';
+      var m = /^(.*?)([.,;:!?)]*)$/.exec(bare);
+      return '<a href="' + m[1] + '" target="_blank" rel="noopener">' + m[1] + '</a>' + m[2];
+    });
+  }
+  function ago(s) {
+    var d = new Date(String(s).replace(' ', 'T') + (/Z|[+-]\d\d:?\d\d$/.test(s) ? '' : 'Z')); if (isNaN(d)) return '';
+    return d.getDate() + ' ' + MONTHS[d.getMonth()].slice(0, 3) + ', ' + time(d);
+  }
+  function updatesList(list, owner) {
+    if (!list || !list.length) return '';
+    return '<div class="updates">' + list.map(function (u) {
+      return '<div class="update"><p class="date">' + esc(ago(u.created_at)) + (owner ? (u.guests_only ? ' · Guests only' : ' · Public') + (u.emailed ? ' · Emailed' : '') : '') + '</p>' +
+        (u.text ? '<p class="details">' + linkify(u.text) + '</p>' : '') +
+        (u.photo ? '<a href="' + esc(u.photo) + '" target="_blank" rel="noopener"><img class="upd-photo" src="' + esc(u.photo) + '" alt="" loading="lazy"></a>' : '') +
+        (owner ? '<div><button class="link small" data-act="delupdate" data-id="' + u.id + '">Delete</button></div>' : '') + '</div>';
+    }).join('') + '</div>';
+  }
+  // Updates: posted on the event page; emailed to confirmed guests only when the box is ticked
   function messageBox() {
     var e = current.event, nConf = current.guests.filter(function (g) { return g.status === 'confirmed'; }).length;
-    var nAll = current.guests.filter(function (g) { return g.status !== 'declined'; }).length;
-    if (!nAll) return '';
-    if (!mailOn) return '<div class="box"><span class="sc">Write to your guests</span><p class="quiet small">Emails are not switched on yet. Once Email Sending is on for rsvp.fm in Cloudflare, you can send the address or any news to everyone on the list from here.</p></div>';
-    var m = e.msg || {}, auto = m.auto && m.text ? '<p class="small">Sent on its own to every new confirmed guest: <b>' + esc(m.subject) + '</b> · <button class="link small" data-act="stopauto">Stop</button></p>' :
-      m.text ? '<p class="quiet small">Last message: ' + esc(m.subject) + ' · <button class="link small" data-act="startauto">Send it to new guests too</button></p>' : '';
-    return '<div class="box"><span class="sc">Write to your guests</span>' + auto +
-      '<form id="f-message" data-confirm="0"><div class="seg"><label><input type="radio" name="audience" value="confirmed" checked><span>Confirmed (' + nConf + ')</span></label>' +
-      '<label><input type="radio" name="audience" value="all"><span>Everyone on the list (' + nAll + ')</span></label></div>' +
-      '<label><span>Subject</span><input name="subject" maxlength="140" required value="' + esc('The address · ' + e.title) + '"></label>' +
-      '<label><span>Message</span><textarea name="text" maxlength="5000" required placeholder="The address is… Doors open at… See you there."></textarea></label>' +
-      '<label class="check"><input type="checkbox" name="auto" value="1" checked><span>Also send it to everyone confirmed later</span></label>' +
-      '<p class="err" hidden></p><div class="acts"><button class="btn small" type="submit">Send</button><span class="quiet small">Sent from ' + esc(org.handle) + '@rsvp.fm</span></div>' +
-      '<div class="acts small"><input name="test_to" type="email" value="' + esc(org.email || '') + '" placeholder="you@example.com" style="flex:1;min-width:160px;font-size:16px"><button class="btn small line" type="button" data-act="testmsg">Send a test</button></div></form></div>';
+    var m = e.msg || {}, auto = mailOn && m.auto && m.text ? '<p class="small">Emailed on its own to every new confirmed guest: <b>' + esc(m.subject) + '</b> · <button class="link small" data-act="stopauto">Stop</button></p>' : '';
+    return '<div class="box"><span class="sc">Updates</span>' + auto +
+      '<form id="f-update" data-confirm="0">' +
+      '<label><span>New update</span><textarea name="text" maxlength="5000" placeholder="News, the address, the door time… Links work as they are, or write [text](https://…)."></textarea></label>' +
+      '<input type="hidden" name="photo" value=""><div id="upd-photo"></div>' +
+      '<div class="acts small"><label class="btn small line" style="flex-direction:row;cursor:pointer">Add a photo<input type="file" id="up-upd" accept="image/*" hidden></label></div>' +
+      '<label class="check"><input type="checkbox" name="guests_only"><span>Only guests on the list see it<small>Otherwise everyone who opens the event page sees it.</small></span></label>' +
+      (mailOn ? '<label class="check"><input type="checkbox" name="email"><span>Also email it to confirmed guests (' + nConf + ')<small>Sent from ' + esc(org.handle) + '@rsvp.fm, as a plain email.</small></span></label>' +
+        '<div id="upd-mail" class="stack" hidden>' +
+        '<label><span>Email subject</span><input name="subject" maxlength="140" value="' + esc('Update · ' + e.title) + '"></label>' +
+        '<label class="check"><input type="checkbox" name="auto" checked><span>Also email it to everyone confirmed later</span></label>' +
+        '<div class="acts small"><input name="test_to" type="email" value="' + esc(org.email || '') + '" placeholder="you@example.com" style="flex:1;min-width:160px;font-size:16px"><button class="btn small line" type="button" data-act="testmsg">Send a test</button></div></div>' : '') +
+      '<p class="err" hidden></p><div class="acts"><button class="btn small" type="submit">Post the update</button></div></form>' +
+      updatesList(e.updates, true) + '</div>';
   }
   function invitesBox() {
     var h = '<div class="box"><span class="sc">Unique invitation links</span>' +
@@ -563,7 +547,8 @@
         (e.starts_at ? '<p class="when">' + esc(whenLine(e)) + '</p>' : '') +
         ([e.venue, e.city].filter(Boolean).length ? '<p class="quiet">' + esc([e.venue, e.city].filter(Boolean).join(', ')) + '</p>' : '') + '</div>';
       h += '<p class="ornament">· · ·</p>';
-      if (e.details) h += '<p class="details">' + esc(e.details) + '</p>';
+      if (e.updates && e.updates.length) h += '<div class="stack"><h3>Updates</h3>' + updatesList(e.updates, false) + '</div><hr class="rule">';
+      if (e.details) h += '<p class="details">' + linkify(e.details) + '</p>';
       if (ph.length > 1) h += '<div class="gallery">' + ph.slice(1).map(function (u) { return '<a href="' + esc(u) + '" target="_blank" rel="noopener"><img src="' + esc(u) + '" alt="" loading="lazy"></a>'; }).join('') + '</div>';
       if (e.details || ph.length > 1) h += '<hr class="rule">';
       if (j.invite && !j.invite.mine && j.invite.used) h += '<div class="card"><p class="sc">Invitation</p><h2>This link has already been used.</h2><p class="quiet small">Ask ' + esc(host.name) + ' for a new one.</p></div>';
@@ -721,6 +706,8 @@
   document.addEventListener('click', function (ev) {
     var a = ev.target.closest('a[href]');
     if (a && a.origin === location.origin && !a.target && !ev.metaKey && !ev.ctrlKey && !a.hasAttribute('download')) { ev.preventDefault(); go(a.pathname + a.search); return; }
+    var am = document.getElementById('acct-menu');
+    if (am && !am.hidden && !ev.target.closest('#acct-menu') && !ev.target.closest('.acct-btn')) am.hidden = true;
     var b = ev.target.closest('[data-act]'); if (!b) return;
     var act = b.getAttribute('data-act'), id = b.getAttribute('data-id');
     if (act === 'sort') { current.sort = b.value; renderManage(); return; }
@@ -737,12 +724,19 @@
       return;
     }
     if (act === 'testmsg') {
-      var tf = document.getElementById('f-message'), td = Object.fromEntries(new FormData(tf));
-      if (!td.subject || !td.text || !td.test_to) { say('Write a subject, a message and a test address.'); return; }
+      var td = formData(document.getElementById('f-update'));
+      if ((!td.text && !td.photo) || !td.test_to) { say('Write the update and a test address.'); return; }
       b.disabled = true;
-      api('POST', '/events/' + current.event.id + '/message', { subject: td.subject, text: td.text, test_to: td.test_to }).then(function (r) { b.disabled = false; say('Test sent to ' + r.test + '.'); }).catch(function (e) { b.disabled = false; say(e.message); });
+      api('POST', '/events/' + current.event.id + '/updates', { subject: td.subject, text: td.text, photo: td.photo, test_to: td.test_to }).then(function (r) { b.disabled = false; say('Test sent to ' + r.test + '.'); }).catch(function (e) { b.disabled = false; say(e.message); });
       return;
     }
+    if (act === 'delupdate') {
+      api('DELETE', '/events/' + current.event.id + '/updates/' + id).then(function () {
+        current.event.updates = current.event.updates.filter(function (u) { return String(u.id) !== String(id); }); say('Deleted.'); renderManage();
+      }).catch(function (e) { say(e.message); });
+      return;
+    }
+    if (act === 'rmupdphoto') { var fu = document.getElementById('f-update'); fu.elements.namedItem('photo').value = ''; document.getElementById('upd-photo').innerHTML = ''; return; }
     if (act === 'loginas') { go('/login' + (id === 'guest' ? '?as=guest' : ''), true); return; }
     if (act === 'copylink') return copy(id, 'Link copied.');
     if (act === 'sharelink') { navigator.share({ title: current.event.title, url: id }).catch(function () {}); return; }
@@ -771,12 +765,6 @@
       });
       return;
     }
-    if (act === 'customfrom') {
-      var st = startCustom(id), f2 = document.getElementById('f-account');
-      f2.elements.namedItem('c_paper').value = st.paper; f2.elements.namedItem('c_ink').value = st.ink; f2.elements.namedItem('c_accent').value = st.accent;
-      f2.elements.namedItem('c_display').value = st.display; f2.elements.namedItem('c_text').value = st.text;
-      renderCustomPreview(); return;
-    }
     if (act === 'pushon' || act === 'pushoff') {
       b.disabled = true;
       (act === 'pushon' ? pushOn(b) : pushOff(b)).catch(function (e) { say(e.message || 'Could not change notifications.'); b.disabled = false; });
@@ -784,6 +772,13 @@
     }
     if (act === 'rmphoto') { setFormPhotos(formPhotos().filter(function (u) { return u !== id; })); return; }
     if (act === 'coverphoto') { var pl = formPhotos().filter(function (u) { return u !== id; }); pl.unshift(id); setFormPhotos(pl); return; }
+    if (act === 'accounts') { accountsMenu(); return; }
+    if (act === 'switchacct') {
+      api('POST', '/switch', id === 'guest' ? { guest: true } : { handle: id }).then(function (j) {
+        org = j.org; person = j.person || person; say('Now using ' + (org ? org.name : person.name) + '.'); go(org ? '/' : '/me', true);
+      }).catch(function (e) { say(e.message); });
+      return;
+    }
     if (act === 'logout') { api('POST', '/logout').then(function () { org = null; go('/', true); }); return; }
     if (act === 'plogout') { api('POST', '/people/logout').then(function () { person = null; go('/', true); }); return; }
     b.disabled = true;
@@ -825,14 +820,23 @@
       api('DELETE', '/events/' + id).then(function () { say('Deleted.'); go('/', true); }).catch(function (e) { say(e.message); done(); });
     }
   });
-  function onCustomInput(ev) {
-    var t = ev.target;
-    if (t.name === 'theme') { var ed = document.getElementById('custom-ed'); if (ed) ed.hidden = t.value !== 'custom'; return; }
-    if (t.getAttribute && t.getAttribute('data-custom')) renderCustomPreview();
-  }
-  document.addEventListener('input', onCustomInput);
   document.addEventListener('change', function (ev) {
-    onCustomInput(ev);
+    if (ev.target.name === 'email' && ev.target.closest('#f-update')) {
+      var um = document.getElementById('upd-mail'); if (um) um.hidden = !ev.target.checked;
+      var fu0 = document.getElementById('f-update'); fu0.setAttribute('data-confirm', '0'); fu0.querySelector('[type=submit]').textContent = 'Post the update';
+      return;
+    }
+    if (ev.target.id === 'up-upd' && ev.target.files.length) {
+      var fu = document.getElementById('f-update'), sb = fu.querySelector('[type=submit]');
+      sb.disabled = true; say('Uploading the photo…');
+      preparePhoto(ev.target.files[0]).then(function (data) { return api('POST', '/images', { data: data }); }).then(function (r) {
+        fu.elements.namedItem('photo').value = r.url;
+        document.getElementById('upd-photo').innerHTML = '<img class="upd-photo" src="' + esc(r.url) + '" alt=""><div><button type="button" class="link small" data-act="rmupdphoto">Remove the photo</button></div>';
+        sb.disabled = false;
+      }).catch(function (e) { sb.disabled = false; say(e.message); });
+      ev.target.value = '';
+      return;
+    }
     if (ev.target.id === 'up-photos' && ev.target.files.length) {
       var files = Array.prototype.slice.call(ev.target.files, 0, 12), list = formPhotos(), btn = document.querySelector('#f-event [type=submit]');
       if (btn) btn.disabled = true;
@@ -865,11 +869,10 @@
       api('POST', '/signup', d).then(function (j) { org = j.org; go('/account', true); say('Welcome. Set up your page.'); }).catch(fail);
     } else if (f.id === 'f-login') {
       api('POST', '/login', d).then(function (j) {
-        if (j.org) org = j.org; else person = j.person;
+        if (j.org) org = j.org; else { person = j.person; org = null; }
         go(safeNext || (j.org ? '/' : '/me'), true);
       }).catch(fail);
     } else if (f.id === 'f-account') {
-      d.custom = readCustom();
       api('PATCH', '/me', d).then(function (j) { org = j.org; say('Saved.'); viewAccount(); }).catch(fail);
     } else if (f.id === 'f-event') {
       var eid = f.getAttribute('data-id');
@@ -892,14 +895,17 @@
       api('POST', '/people/signup', { event: pid, t: tokenFor(pid), password: d.password }).then(function (j) {
         person = j.person; say('Done. Your next invitations will be waiting here.'); viewGuest(pid);
       }).catch(fail);
-    } else if (f.id === 'f-message') {
-      var n = d.audience === 'all' ? current.guests.filter(function (g) { return g.status !== 'declined'; }).length : current.guests.filter(function (g) { return g.status === 'confirmed'; }).length;
-      if (f.getAttribute('data-confirm') !== '1') {
-        f.setAttribute('data-confirm', '1'); btn.disabled = false; btn.textContent = 'Tap again to send to ' + n + (n === 1 ? ' person' : ' people'); return;
+    } else if (f.id === 'f-update') {
+      if (!d.text && !d.photo) { fail(new Error('Write something or add a photo.')); return; }
+      var n = current.guests.filter(function (g) { return g.status === 'confirmed'; }).length;
+      if (d.email && f.getAttribute('data-confirm') !== '1') {
+        f.setAttribute('data-confirm', '1'); btn.disabled = false; btn.textContent = 'Tap again to post and email ' + n + (n === 1 ? ' person' : ' people'); return;
       }
-      api('POST', '/events/' + current.event.id + '/message', { audience: d.audience, subject: d.subject, text: d.text, auto: !!d.auto }).then(function (r) {
-        say('Sent to ' + r.sent + (r.sent === 1 ? ' guest.' : ' guests.') + (d.auto ? ' New guests will get it too.' : ''));
-        current.event.msg = { subject: d.subject, text: d.text, auto: !!d.auto, at: new Date().toISOString() }; renderManage();
+      api('POST', '/events/' + current.event.id + '/updates', { text: d.text, photo: d.photo, guests_only: !!d.guests_only, email: !!d.email, subject: d.subject, auto: !!d.auto }).then(function (r) {
+        say('Posted' + (d.email ? ' and emailed to ' + r.sent + (r.sent === 1 ? ' guest.' : ' guests.') : '.'));
+        current.event.updates = [r.update].concat(current.event.updates || []);
+        if (d.email) current.event.msg = { subject: d.subject, text: d.text, auto: !!d.auto };
+        renderManage();
       }).catch(fail);
     } else if (f.id === 'f-keep') {
       var kid = f.getAttribute('data-id');

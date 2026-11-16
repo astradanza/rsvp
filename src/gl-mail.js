@@ -109,17 +109,27 @@ export async function mailRsvp(env, { event, org, guest }) {
   });
 }
 // A message from the organizer to the guests of one event (the address, the door time…)
-export async function mailMessage(env, { event, org, guest, subject, text }) {
-  // A plain, ordinary-looking email: the organizer's words, nothing else designed around them
+// Links in what organizers write: bare https:// addresses, and [text](https://…)
+const LINK_RE = /\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
+export function linkHtml(t) {
+  return esc(String(t)).replace(LINK_RE, (all, label, href, bare) => {
+    if (href) return `<a href="${href}">${label}</a>`;
+    const m = /^(.*?)([.,;:!?)]*)$/.exec(bare);
+    return `<a href="${m[1]}">${m[1]}</a>${m[2]}`;
+  }).replace(/\n/g, '<br>');
+}
+const linkText = (t) => String(t).replace(/\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)]+)\)/g, '$1 ($2)');
+export async function mailMessage(env, { event, org, guest, subject, text, photo }) {
+  // A plain, ordinary-looking email: the organizer's words (and a photo), nothing else designed around them
   const link = `${appUrl(env)}${evPath(org.handle, event)}` + (guest.token ? `?t=${encodeURIComponent(guest.token)}` : '');
   const foot = `You receive this because you are on the guestlist of ${event.title}.\nYour invitation: ${link}`;
-  const auto = (t) => esc(t).replace(/https?:\/\/[^\s<]+/g, (u) => `<a href="${u}">${u}</a>`).replace(/\n/g, '<br>');
+  const img = photo && /^\/api\/img\/[a-z0-9]+$/.test(photo) ? `<br><br><img src="${appUrl(env)}${photo}" alt="" style="max-width:100%;height:auto">` : '';
   return send(env, {
     to: guest.email, fromHandle: org.handle, fromName: org.name, kind: 'message', event_id: event.id, org_id: org.id,
     subject,
     raw: {
-      html: `<div>${auto(String(text))}</div><br><div style="color:#888;font-size:12px">--<br>${auto(foot)}</div>`,
-      text: `${text}\n\n--\n${foot}`
+      html: `<div>${linkHtml(text)}${img}</div><br><div style="color:#888;font-size:12px">--<br>${linkHtml(foot)}</div>`,
+      text: `${linkText(text)}${img ? `\n\n${appUrl(env)}${photo}` : ''}\n\n--\n${foot}`
     }
   });
 }
