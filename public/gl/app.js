@@ -200,8 +200,35 @@
       '<form id="f-login"><label><span>Email or handle</span><input name="email" required autocomplete="username" autocapitalize="none"></label>' +
       '<label><span>Password</span><input name="password" type="password" required autocomplete="current-password"></label>' +
       '<p class="err" id="err" hidden></p><button class="btn wide" type="submit">Log in</button></form>' +
+      '<p class="small center"><a href="/forgot">Forgot your password?</a></p>' +
       '<p class="quiet small center">Your rsvp.fm account works here: same email, same password.</p>' +
       '<p class="quiet small center">Promoter, label, artist or club? <a href="/signup">Create an organizer account</a></p></div>';
+  }
+
+  // ---------- forgotten password: a magic link by email ----------
+  function viewForgot() {
+    header();
+    main.innerHTML = '<div class="stack lg"><div class="stack"><p class="sc">Forgot your password</p><h1>Get a login link</h1></div>' +
+      '<p class="quiet">Enter your handle or your email. We send a link to the email of the account: it logs you in, then you choose a new password.</p>' +
+      '<form id="f-forgot"><label><span>Handle or email</span><input name="login" required autocomplete="username" autocapitalize="none"></label>' +
+      '<p class="err" id="err" hidden></p><button class="btn wide" type="submit">Send me a link</button></form>' +
+      '<p class="quiet small center"><a href="/login">Back to log in</a></p></div>';
+  }
+  function viewReset() {
+    header(); loading();
+    var k = new URLSearchParams(location.search).get('k') || '';
+    api('POST', '/magic', { k: k }).then(function (j) {
+      org = j.org; person = j.person || person;
+      history.replaceState({}, '', '/reset');
+      header();
+      var as = j.org ? 'org' : 'guest', name = j.org ? j.org.name : j.person.name;
+      main.innerHTML = '<div class="stack lg"><div class="stack"><p class="sc">Logged in as ' + esc(name) + '</p><h1>Choose a new password</h1></div>' +
+        '<form id="f-newpass" data-as="' + as + '"><label><span>New password</span><input name="password" type="password" minlength="8" required autocomplete="new-password"></label>' +
+        '<p class="err" id="err" hidden></p><button class="btn wide" type="submit">Save the password</button></form>' +
+        '<p class="quiet small center"><a href="' + (j.org ? '/' : '/me') + '">Skip for now</a></p></div>';
+    }).catch(function (e) {
+      main.innerHTML = '<div class="stack center"><p class="when">' + esc(e.message) + '</p><p><a href="/forgot">Get a new link</a></p></div>';
+    });
   }
 
   // ---------- organizer: page settings ----------
@@ -895,6 +922,13 @@
       api('POST', '/people/signup', { event: pid, t: tokenFor(pid), password: d.password }).then(function (j) {
         person = j.person; say('Done. Your next invitations will be waiting here.'); viewGuest(pid);
       }).catch(fail);
+    } else if (f.id === 'f-forgot') {
+      api('POST', '/forgot', d).then(function () {
+        main.innerHTML = '<div class="stack lg center"><h1>Check your email</h1><p class="quiet">If an account matches <b>' + esc(d.login) + '</b>, a login link is on its way. It works once, for one hour.</p><p class="small"><a href="/login">Back to log in</a></p></div>';
+      }).catch(fail);
+    } else if (f.id === 'f-newpass') {
+      var asg = f.getAttribute('data-as');
+      api('POST', '/password', { password: d.password, as: asg }).then(function () { say('Password saved.'); go(asg === 'org' ? '/' : '/me', true); }).catch(fail);
     } else if (f.id === 'f-update') {
       if (!d.text && !d.photo) { fail(new Error('Write something or add a photo.')); return; }
       var n = current.guests.filter(function (g) { return g.status === 'confirmed'; }).length;
@@ -927,6 +961,8 @@
     var p = location.pathname.replace(/\/+$/, '') || '/', m;
     if (p === '/') return org ? viewEvents() : person ? viewMe() : standalone ? viewLogin() : viewWelcome();
     if (p === '/login') return viewLogin();
+    if (p === '/forgot') return viewForgot();
+    if (p === '/reset') return viewReset();
     if (p === '/signup') return org ? go('/', true) : viewSignup();
     if (p === '/account') return viewAccount();
     if (p === '/community') return viewCommunity();

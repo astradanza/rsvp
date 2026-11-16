@@ -4,7 +4,7 @@
 // can opt in to the organizer's next invitations and keep a guest account to receive them here.
 // Own tables (gl_*), own sessions, own static app (public/gl/).
 
-import { mailEnabled, mailRsvp, mailConfirmed, mailMessage, sendDigests, prefsFor } from './gl-mail.js';
+import { mailEnabled, mailRsvp, mailConfirmed, mailMessage, mailReset, sendDigests, prefsFor } from './gl-mail.js';
 import { migrateV1 } from './gl-migrate.js';
 import { vapidKeys, validSubscription, pushTo } from './gl-push.js';
 
@@ -25,7 +25,7 @@ function customOf(o) {
 }
 function themeOf(theme, custom) { return theme === 'custom' && custom ? 'custom' : THEMES.includes(theme) ? theme : DEFAULT_THEME; }
 const RESERVED = new Set(['api', 'e', 'i', 'new', 'login', 'signup', 'logout', 'account', 'community', 'me', 'img', 'app', 'style', 'favicon', 'prefs',
-  'admin', 'settings', 'help', 'about', 'terms', 'privacy', 'www', 'list', 'rsvp', 'events', 'event', 'invite', 'join', 'guest', 'guests']);
+  'admin', 'settings', 'help', 'about', 'terms', 'privacy', 'www', 'list', 'rsvp', 'events', 'event', 'invite', 'join', 'guest', 'guests', 'forgot', 'reset', 'password']);
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,29}$/;
 
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
@@ -132,6 +132,9 @@ async function ensureSchema(env) {
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_push (endpoint TEXT PRIMARY KEY, email TEXT NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
     env.DB.prepare('CREATE INDEX IF NOT EXISTS gl_push_email ON gl_push(email)'),
+    // Magic links (forgotten password): one use, one hour
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_resets (token TEXT PRIMARY KEY, kind TEXT NOT NULL, account_id INTEGER NOT NULL, email TEXT NOT NULL,
+      used INTEGER NOT NULL DEFAULT 0, expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
     // Updates organizers post on an event page (optionally emailed to the guests)
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_updates (id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL REFERENCES gl_events(id) ON DELETE CASCADE,
       text TEXT NOT NULL DEFAULT '', photo TEXT NOT NULL DEFAULT '', guests_only INTEGER NOT NULL DEFAULT 0, emailed INTEGER NOT NULL DEFAULT 0,
@@ -419,6 +422,52 @@ async function api(request, env, url, ctx) {
     const p = await env.DB.prepare('SELECT * FROM gl_people WHERE email = ?').bind(id).first();
     if (p && await verifyPassword(password, p.password_hash)) return json({ person: personShape(p) }, 200, { 'set-cookie': [await startPersonSession(env, p.id, url), makeCookie('gsid', '', url, 0), tokensCookie(orgTokens(request), url)] });
     fail(401, 'Wrong email or password.');
+  }
+  // Forgotten password: a handle or an email; a magic link goes to the account's email. Same answer whether or not it exists.
+  if (path === '/api/forgot' && method === 'POST') {
+    const b = await body(request);
+    const id = str(b.login || b.email, 160).toLowerCase().replace(/^@/, '');
+    if (!id) fail(400, 'Enter your handle or your email.');
+    if (!mailEnabled(env)) fail(503, 'Emails are not available right now.');
+    const accounts = [];
+    const o = await env.DB.prepare('SELECT * FROM gl_orgs WHERE email = ? OR handle = ?').bind(id, id).first();
+    if (o) accounts.push({ kind: 'org', id: o.id, email: o.email, name: o.name });
+    const p = EMAIL_RE.test(id) ? await env.DB.prepare('SELECT * FROM gl_people WHERE email = ?').bind(id).first() : null;
+    if (p) accounts.push({ kind: 'guest', id: p.id, email: p.email, name: p.name });
+    for (const a of accounts) {
+      const { n } = await env.DB.prepare(`SELECT COUNT(*) AS n FROM gl_resets WHERE email = ? AND created_at > datetime('now', '-15 minutes')`).bind(a.email).first();
+      if (n >= 3) continue;
+      const t = token();
+      await env.DB.prepare(`INSERT INTO gl_resets (token, kind, account_id, email, expires_at) VALUES (?, ?, ?, ?, datetime('now', '+1 hour'))`).bind(t, a.kind, a.id, a.email).run();
+      await later(mailReset(env, { to: a.email, name: a.name, kind: a.kind, link: `${url.origin}/reset?k=${encodeURIComponent(t)}` }));
+    }
+    return json({ ok: true });
+  }
+  // Opening the magic link logs in, then lets them choose a new password
+  if (path === '/api/magic' && method === 'POST') {
+    const b = await body(request);
+    const t = String(b.k || '');
+    const r = TOKEN_RE.test(t) ? await env.DB.prepare(`SELECT * FROM gl_resets WHERE token = ? AND used = 0 AND expires_at > datetime('now')`).bind(t).first() : null;
+    if (!r) fail(410, 'This link has expired or was already used. Ask for a new one.');
+    await env.DB.prepare('UPDATE gl_resets SET used = 1 WHERE token = ?').bind(t).run();
+    if (r.kind === 'org') {
+      const o = await env.DB.prepare('SELECT * FROM gl_orgs WHERE id = ?').bind(r.account_id).first();
+      if (!o) fail(404, 'This account does not exist anymore.');
+      return json({ org: orgShape(o), person: person ? personShape(person) : null }, 200, { 'set-cookie': await startSession(env, o.id, url, request) });
+    }
+    const p = await env.DB.prepare('SELECT * FROM gl_people WHERE id = ?').bind(r.account_id).first();
+    if (!p) fail(404, 'This account does not exist anymore.');
+    return json({ org: null, person: personShape(p) }, 200, { 'set-cookie': [await startPersonSession(env, p.id, url), makeCookie('gsid', '', url, 0), tokensCookie(orgTokens(request), url)] });
+  }
+  // A new password for the account in use (the organizer account, or the guest profile)
+  if (path === '/api/password' && method === 'POST') {
+    const b = await body(request);
+    const password = String(b.password || '');
+    if (password.length < 8) fail(400, 'Use at least 8 characters.');
+    if (b.as === 'guest' ? !person : !org) fail(401, 'Log in first.');
+    if (b.as === 'guest') await env.DB.prepare('UPDATE gl_people SET password_hash = ? WHERE id = ?').bind(await hashPassword(password), person.id).run();
+    else await env.DB.prepare('UPDATE gl_orgs SET password_hash = ? WHERE id = ?').bind(await hashPassword(password), org.id).run();
+    return json({ ok: true });
   }
   // Old personal invite links (rsvp.fm/i/code) lead to the page of whoever sent them
   if (seg[0] === 'invite' && seg[1] && method === 'GET') {

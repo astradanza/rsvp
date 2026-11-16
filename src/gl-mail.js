@@ -109,6 +109,11 @@ export async function mailRsvp(env, { event, org, guest }) {
   });
 }
 // A message from the organizer to the guests of one event (the address, the door time…)
+export async function mailReset(env, { to, name, kind, link }) {
+  const text = `Hello${name ? ' ' + name : ''},\n\nHere is your link to log in to rsvp.fm${kind === 'guest' ? '' : ' as ' + name} and choose a new password:\n${link}\n\nIt works once, for one hour. If you did not ask for it, ignore this email: nothing changes.`;
+  return send(env, { to, fromHandle: 'hello', fromName: '', subject: 'Your rsvp.fm login link', kind: 'reset',
+    raw: { html: `<div>${linkHtml(text)}</div>`, text } });
+}
 // Links in what organizers write: bare https:// addresses, and [text](https://…)
 const LINK_RE = /\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
 export function linkHtml(t) {
