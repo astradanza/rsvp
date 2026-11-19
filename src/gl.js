@@ -1025,7 +1025,7 @@ export async function handleGuestlist(request, env, url, ctx) {
   }
   // Static files live in public/gl/; every other path is the app.
   if (/^\/avatars\/\d+\.webp$/.test(url.pathname)) return env.ASSETS.fetch(request);
-  const file = /^\/(app\.js|style\.css|favicon\.svg|sw\.js|manifest\.webmanifest|icon-192\.png|icon-512\.png|apple-touch-icon\.png|badge-72\.png)$/.exec(url.pathname);
+  const file = /^\/(app\.js|style\.css|favicon\.svg|favicon\.ico|favicon-32\.png|favicon-48\.png|sw\.js|manifest\.webmanifest|icon-192\.png|icon-512\.png|apple-touch-icon\.png|badge-72\.png)$/.exec(url.pathname);
   const target = new URL(file ? '/gl/' + file[1] : '/gl/', url);
   const res = await env.ASSETS.fetch(new Request(target, request));
   if (file) return res;
