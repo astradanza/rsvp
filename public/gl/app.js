@@ -586,9 +586,13 @@
       h += '<p class="ornament">· · ·</p>';
       if (j.access) {
         h += '<div class="stack"><h3>Upcoming</h3>';
-        if (j.events.length) h += '<div class="list">' + j.events.map(function (e) {
-          return '<a class="item" href="' + esc(eventPath(e, o.handle)) + '"><span class="date">' + esc(shortDate(e.starts_at)) + '</span><span class="main"><span class="t">' + esc(e.title) + '</span>' +
-            '<span class="m">' + esc([e.venue, e.city].filter(Boolean).join(', ')) + (e.open ? '' : (e.venue || e.city ? ' · ' : '') + 'list closed') + '</span></span></a>';
+        // Upcoming events as a grid of thumbnails: 2 columns on phones, more on wider screens
+        if (j.events.length) h += '<div class="egrid">' + j.events.map(function (e) {
+          var where = [e.venue, e.city].filter(Boolean).join(', ');
+          return '<a class="ecard" href="' + esc(eventPath(e, o.handle)) + '"><span class="thumb">' +
+            (e.photos && e.photos[0] ? '<img src="' + esc(e.photos[0]) + '" alt="" loading="lazy">' : '<span class="ph-date">' + esc(parse(e.starts_at) ? shortDate(e.starts_at) : '·') + '</span>') + '</span>' +
+            '<span class="date">' + esc(parse(e.starts_at) ? shortDate(e.starts_at) + ' · ' + time(parse(e.starts_at)) : 'Date to come') + '</span>' +
+            '<span class="t">' + esc(e.title) + '</span>' + (where || !e.open ? '<span class="m">' + esc(where) + (e.open ? '' : (where ? ' · ' : '') + 'list closed') + '</span>' : '') + '</a>';
         }).join('') + '</div>';
         else h += '<p class="quiet">No upcoming events yet.</p>';
         h += '</div>';
