@@ -39,8 +39,9 @@ ${after.map((l) => p(l, 'color:#6b6b6b;font-size:14px')).join('\n')}
 <p style="margin:26px 0 0;padding-top:14px;border-top:1px solid #eeeeee;font:12px/1.5 ${FONT};color:#9a9a9a">${footer || 'Sent by rsvp.fm on behalf of the organizer.'}</p>
 </td></tr></table></td></tr></table></body></html>`;
 }
+const strip = (l) => l.replace(/<br\s*\/?>|<\/(?:p|div|tr|li|strong|b)>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
 const textOf = ({ title, lines = [], button, after = [], footer }) =>
-  [title, '', ...lines.map((l) => l.replace(/<[^>]+>/g, '')), button ? `${button.label}: ${button.href}` : '', '', ...after.map((l) => l.replace(/<[^>]+>/g, '')), '', (footer || '').replace(/<[^>]+>/g, '')].join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  [strip(title), '', ...lines.map(strip), button ? `${button.label}: ${button.href}` : '', '', ...after.map(strip), '', strip(footer || '')].join('\n').replace(/\n{3,}/g, '\n\n').trim();
 
 async function logMail(env, row) {
   await env.DB.prepare('INSERT INTO gl_mail_log (kind, email, event_id, org_id, status, detail) VALUES (?, ?, ?, ?, ?, ?)')
@@ -108,6 +109,43 @@ export async function mailRsvp(env, { event, org, guest }) {
   });
 }
 // A message from the organizer to the guests of one event (the address, the door time…)
+// --- admin: a note for each new account, and one recap a day ---
+const adminTo = (env) => String(env.ADMIN_EMAIL || 'daniel@astradanza.com').split(',').map((x) => x.trim()).filter(Boolean);
+export async function mailAdmin(env, subject, text) {
+  if (!mailEnabled(env)) return;
+  for (const to of adminTo(env)) {
+    await send(env, { to, fromHandle: 'admin', fromName: '', subject, kind: 'admin', raw: { html: `<div style="font:14px/1.6 -apple-system,Helvetica,Arial,sans-serif;color:#111">${linkHtml(text)}</div>`, text } });
+  }
+}
+export async function adminRecap(env) {
+  const since = "datetime('now', '-1 day')";
+  const all = async (q) => (await env.DB.prepare(q).all()).results;
+  const hosts = await all(`SELECT name, handle, email FROM gl_orgs WHERE created_at > ${since} ORDER BY id`);
+  const people = await all(`SELECT name, email FROM gl_people WHERE created_at > ${since} ORDER BY id`);
+  const events = await all(`SELECT e.title, e.starts_at, e.slug, e.id, e.listed, o.name AS org, o.handle FROM gl_events e JOIN gl_orgs o ON o.id = e.org_id WHERE e.created_at > ${since} ORDER BY e.created_at`);
+  const rsvps = await all(`SELECT e.title, o.name AS org, COUNT(*) AS n, SUM(1 + g.plus) AS people, SUM(g.status = 'confirmed') AS confirmed, SUM(g.status = 'requested') AS pending
+    FROM gl_guests g JOIN gl_events e ON e.id = g.event_id JOIN gl_orgs o ON o.id = e.org_id WHERE g.created_at > ${since} GROUP BY e.id ORDER BY n DESC`);
+  const joins = await all(`SELECT o.name AS org, COUNT(*) AS n FROM gl_contacts c JOIN gl_orgs o ON o.id = c.org_id WHERE c.created_at > ${since} GROUP BY o.id ORDER BY n DESC`);
+  const posts = await all(`SELECT o.name AS org, COUNT(*) AS n FROM gl_posts p JOIN gl_orgs o ON o.id = p.org_id WHERE p.created_at > ${since} GROUP BY o.id`);
+  const mails = await all(`SELECT status, COUNT(*) AS n FROM gl_mail_log WHERE created_at > ${since} GROUP BY status`);
+  const totals = await env.DB.prepare(`SELECT (SELECT COUNT(*) FROM gl_orgs) AS hosts, (SELECT COUNT(*) FROM gl_people) AS people, (SELECT COUNT(*) FROM gl_events) AS events, (SELECT COUNT(*) FROM gl_guests) AS rsvps`).first();
+  const base = appUrl(env);
+  const nRsvp = rsvps.reduce((a, r) => a + r.n, 0), nPeople = rsvps.reduce((a, r) => a + (r.people || 0), 0);
+  const L = [];
+  L.push(`Last 24 hours on rsvp.fm`);
+  L.push(`${nRsvp} RSVP${nRsvp === 1 ? '' : 's'} (${nPeople} people) · ${events.length} new event${events.length === 1 ? '' : 's'} · ${hosts.length} new host${hosts.length === 1 ? '' : 's'} · ${people.length} new guest account${people.length === 1 ? '' : 's'}`);
+  if (rsvps.length) { L.push('', 'RSVPs'); rsvps.forEach((r) => L.push(`- ${r.title} (${r.org}): ${r.n} RSVP, ${r.people} people, ${r.confirmed} confirmed${r.pending ? `, ${r.pending} waiting` : ''}`)); }
+  if (events.length) { L.push('', 'New events'); events.forEach((e) => L.push(`- ${e.title} by ${e.org}${e.starts_at ? ', ' + e.starts_at.replace('T', ' ') : ''}${e.listed ? '' : ' (link only)'}: ${base}/${e.handle}/${e.slug || e.id}`)); }
+  if (hosts.length) { L.push('', 'New hosts'); hosts.forEach((o) => L.push(`- ${o.name} (@${o.handle}) ${o.email}: ${base}/${o.handle}`)); }
+  if (people.length) { L.push('', 'New guest accounts'); people.forEach((p) => L.push(`- ${p.name} ${p.email}`)); }
+  if (joins.length) { L.push('', 'Community joins'); joins.forEach((j) => L.push(`- ${j.org}: ${j.n}`)); }
+  if (posts.length) { L.push('', 'News posted'); posts.forEach((p) => L.push(`- ${p.org}: ${p.n}`)); }
+  if (mails.length) { L.push('', 'Emails: ' + mails.map((m) => `${m.n} ${m.status}`).join(', ')); }
+  L.push('', `All time: ${totals.hosts} hosts, ${totals.people} guest accounts, ${totals.events} events, ${totals.rsvps} RSVPs.`);
+  const d = new Date().toISOString().slice(0, 10);
+  await mailAdmin(env, `rsvp.fm · ${d} · ${nRsvp} RSVP, ${events.length} event${events.length === 1 ? '' : 's'}, ${hosts.length + people.length} account${hosts.length + people.length === 1 ? '' : 's'}`, L.join('\n'));
+  return { rsvps: nRsvp, events: events.length, hosts: hosts.length, people: people.length };
+}
 export async function mailReset(env, { to, name, kind, link }) {
   const text = `Hello${name ? ' ' + name : ''},\n\nHere is your link to log in to rsvp.fm${kind === 'guest' ? '' : ' as ' + name} and choose a new password:\n${link}\n\nIt works once, for one hour. If you did not ask for it, ignore this email: nothing changes.`;
   return send(env, { to, fromHandle: 'hello', fromName: '', subject: 'Your rsvp.fm login link', kind: 'reset',

@@ -4,7 +4,7 @@
 // can opt in to the organizer's next invitations and keep a guest account to receive them here.
 // Own tables (gl_*), own sessions, own static app (public/gl/).
 
-import { mailEnabled, mailRsvp, mailConfirmed, mailMessage, mailReset, sendDigests, prefsFor } from './gl-mail.js';
+import { mailEnabled, mailRsvp, mailConfirmed, mailMessage, mailReset, mailAdmin, adminRecap, sendDigests, prefsFor } from './gl-mail.js';
 import { migrateV1 } from './gl-migrate.js';
 import { vapidKeys, validSubscription, pushTo } from './gl-push.js';
 
@@ -435,12 +435,13 @@ async function api(request, env, url, ctx) {
     const name = str(b.name, 80);
     const email = str(b.email, 160).toLowerCase();
     const password = String(b.password || '');
-    if (!name) fail(400, 'Enter the name guests will see: your label, your collective, your artist name.');
+    if (!name) fail(400, 'Enter the name guests will see.');
     if (!EMAIL_RE.test(email)) fail(400, 'Enter a valid email address.');
     if (password.length < 8) fail(400, 'Use at least 8 characters for your password.');
     if (await env.DB.prepare('SELECT 1 FROM gl_orgs WHERE email = ?').bind(email).first()) fail(409, 'An account already uses this email. Log in instead.');
     const o = await env.DB.prepare('INSERT INTO gl_orgs (email, password_hash, name, kind, handle, invite_token) VALUES (?, ?, ?, ?, ?, ?) RETURNING *')
       .bind(email, await hashPassword(password), name, KINDS.includes(b.kind) ? b.kind : 'promoter', await freeHandle(env, name), code(12)).first();
+    await later(mailAdmin(env, `New host: ${o.name} (@${o.handle})`, `${o.name} created a host account on rsvp.fm.\n\nHandle: @${o.handle}\nEmail: ${o.email}\nPage: ${url.origin}/${o.handle}`));
     return json({ org: orgShape(o) }, 201, { 'set-cookie': await startSession(env, o.id, url, request) });
   }
   // One login for everyone: an organizer (email or handle) first, then a guest account.
@@ -825,6 +826,7 @@ async function api(request, env, url, ctx) {
     if (name.length < 2) fail(400, 'Enter your full name.');
     if (await env.DB.prepare('SELECT 1 FROM gl_people WHERE email = ?').bind(email).first()) fail(409, 'You already have a password for ' + email + '. Log in instead.');
     const p = await env.DB.prepare('INSERT INTO gl_people (email, name, password_hash) VALUES (?, ?, ?) RETURNING *').bind(email, name, await hashPassword(password)).first();
+    await later(newGuestNote(env, p, 'signed up'));
     return json({ person: personShape(p) }, 201, { 'set-cookie': await startPersonSession(env, p.id, url) });
   }
   if (path === '/api/people/login' && method === 'POST') {
@@ -972,6 +974,7 @@ async function api(request, env, url, ctx) {
         if (String(b.password).length < 8) fail(400, 'Use at least 8 characters for your password.');
         if (!(await env.DB.prepare('SELECT 1 FROM gl_people WHERE email = ?').bind(email).first())) {
           created = await env.DB.prepare('INSERT INTO gl_people (email, name, password_hash) VALUES (?, ?, ?) RETURNING *').bind(email, name, await hashPassword(String(b.password))).first();
+          await later(newGuestNote(env, created, 'joined ' + o.name));
           headers['set-cookie'] = await startPersonSession(env, created.id, url);
         }
       }
@@ -1021,6 +1024,7 @@ async function api(request, env, url, ctx) {
         if (String(b.password).length < 8) fail(400, 'Use at least 8 characters for your password.');
         if (await env.DB.prepare('SELECT 1 FROM gl_people WHERE email = ?').bind(g.email).first()) fail(409, 'You already have a password for ' + g.email + '. Log in instead.');
         created = await env.DB.prepare('INSERT INTO gl_people (email, name, password_hash) VALUES (?, ?, ?) RETURNING *').bind(g.email, g.name, await hashPassword(String(b.password))).first();
+        await later(newGuestNote(env, created, 'after RSVP to ' + e.title));
         headers['set-cookie'] = await startPersonSession(env, created.id, url);
       }
       return json({ ok: true, status: joined, person: created ? personShape(created) : null }, 200, headers);
@@ -1109,8 +1113,11 @@ export function isGuestlistHost(hostname) {
 }
 
 // Daily (cron): email guests their pending invitations
+const newGuestNote = (env, p, how) => p ? mailAdmin(env, `New guest account: ${p.name}`, `${p.name} (${p.email}) created a guest account on rsvp.fm, ${how}.`) : null;
+
 export async function guestlistDaily(env) {
   await ensureSchema(env);
+  try { console.log('admin recap', JSON.stringify(await adminRecap(env))); } catch (e) { console.error('admin recap', e); }
   const r = await sendDigests(env);
   console.log('guestlist digest', JSON.stringify(r));
   return r;
