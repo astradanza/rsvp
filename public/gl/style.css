@@ -220,10 +220,10 @@ body[data-theme=house] .stepper span b{font-family:var(--display)}
 body[data-theme=house] .guest .n .e{font-family:var(--text);font-weight:400;letter-spacing:0;color:var(--muted)}
 
 /* event photos */
-.cover{display:block;width:100%;max-height:70vh;object-fit:cover;margin:-12px 0 4px}
-.gallery{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
-.gallery a{display:block;aspect-ratio:1;overflow:hidden;background:var(--paper2)}
-.gallery img{width:100%;height:100%;object-fit:cover;display:block}
+.cover{display:block;width:100%;height:auto;margin:-12px 0 4px}
+.gallery{display:flex;flex-direction:column;gap:10px}
+.gallery a{display:block}
+.gallery img{width:100%;height:auto;display:block}
 .photos{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .ph{position:relative;aspect-ratio:1;background:var(--paper2);overflow:hidden}
 .ph img{width:100%;height:100%;object-fit:cover;display:block}
@@ -255,7 +255,7 @@ header{position:relative}
 .update{display:flex;flex-direction:column;gap:8px;padding:14px 0;border-top:1px solid var(--line)}
 .update:first-child{border-top:0;padding-top:4px}
 .update .date{font-family:var(--text);font-size:12px;letter-spacing:.08em;color:var(--muted)}
-.upd-photo{display:block;max-width:100%;max-height:420px;height:auto;border:1px solid var(--line)}
+.upd-photo{display:block;width:100%;height:auto}
 .details a,.update a{color:var(--ink);text-decoration-color:var(--accent);word-break:break-word}
 
 /* news */
