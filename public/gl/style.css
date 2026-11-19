@@ -276,3 +276,7 @@ header{position:relative}
 form.f-comment{display:flex;flex-direction:row;gap:10px;align-items:flex-end;flex-wrap:wrap}
 .f-comment input{flex:1 1 0;min-width:0;width:auto}
 .f-comment .err{flex-basis:100%}
+
+/* invite friends */
+.copyfield{display:flex;gap:8px;align-items:stretch}
+.copyfield input{flex:1 1 0;min-width:0;width:auto;font-family:var(--text)}

@@ -157,9 +157,9 @@ async function ensureSchema(env) {
     ['theme', "TEXT NOT NULL DEFAULT 'creme'"], ['visibility', "TEXT NOT NULL DEFAULT 'public'"], ['join_mode', "TEXT NOT NULL DEFAULT 'open'"], ['invite_token', 'TEXT'],
     ['custom_theme', "TEXT NOT NULL DEFAULT ''"], ['v1_user_id', 'INTEGER']
   ]);
-  await addColumns(env, 'gl_guests', [['consent', 'INTEGER NOT NULL DEFAULT 0'], ['names', "TEXT NOT NULL DEFAULT ''"], ['invite_code', 'TEXT'], ['msg_at', "TEXT NOT NULL DEFAULT ''"]]);
+  await addColumns(env, 'gl_guests', [['consent', 'INTEGER NOT NULL DEFAULT 0'], ['names', "TEXT NOT NULL DEFAULT ''"], ['invite_code', 'TEXT'], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['via', 'INTEGER']]);
   await addColumns(env, 'gl_events', [['listed', 'INTEGER NOT NULL DEFAULT 1'], ['slug', 'TEXT'], ['photos', "TEXT NOT NULL DEFAULT '[]'"],
-    ['msg_subject', "TEXT NOT NULL DEFAULT ''"], ['msg_text', "TEXT NOT NULL DEFAULT ''"], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['msg_auto', 'INTEGER NOT NULL DEFAULT 0'], ['msg_photo', "TEXT NOT NULL DEFAULT ''"]]);
+    ['msg_subject', "TEXT NOT NULL DEFAULT ''"], ['msg_text', "TEXT NOT NULL DEFAULT ''"], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['msg_auto', 'INTEGER NOT NULL DEFAULT 0'], ['msg_photo', "TEXT NOT NULL DEFAULT ''"], ['guest_invites', 'INTEGER NOT NULL DEFAULT 1']]);
   await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS gl_orgs_handle ON gl_orgs(handle)').run();
   // guests who RSVP'd before communities existed join their organizer's community (no email consent)
   if (!(await env.DB.prepare('SELECT 1 FROM gl_contacts LIMIT 1').first())) {
@@ -271,16 +271,19 @@ function eventFields(b) {
     plus_max: Math.max(0, Math.min(3, Math.round(Number(b.plus_max) || 0))),
     auto_confirm: b.auto_confirm ? 1 : 0,
     open: b.open === false || b.open === 0 || b.open === '0' ? 0 : 1,
-    listed: b.listed === false || b.listed === 0 || b.listed === '0' ? 0 : 1
+    listed: b.listed === false || b.listed === 0 || b.listed === '0' ? 0 : 1,
+    guest_invites: b.guest_invites === false || b.guest_invites === 0 || b.guest_invites === '0' ? 0 : 1
   };
 }
 const eventShape = (e) => ({
   id: e.id, title: e.title, starts_at: e.starts_at, ends_at: e.ends_at, venue: e.venue, city: e.city, details: e.details,
-  slug: e.slug || '', photos: photosOf(e), plus_max: e.plus_max, auto_confirm: !!e.auto_confirm, open: !!e.open, listed: e.listed == null ? true : !!e.listed, created_at: e.created_at
+  slug: e.slug || '', photos: photosOf(e), plus_max: e.plus_max, auto_confirm: !!e.auto_confirm, open: !!e.open, listed: e.listed == null ? true : !!e.listed, guest_invites: e.guest_invites == null ? true : !!e.guest_invites, created_at: e.created_at
 });
 const updateShape = (u) => ({ id: u.id, text: u.text, photo: u.photo || '', guests_only: !!u.guests_only, emailed: !!u.emailed, created_at: u.created_at });
 const msgShape = (e) => ({ subject: e.msg_subject || '', text: e.msg_text || '', at: e.msg_at || '', auto: !!e.msg_auto });
-const guestShape = (g) => ({ id: g.id, name: g.name, email: g.email, plus: g.plus, names: namesOf(g), invite_code: g.invite_code || '', status: g.status, consent: !!g.consent, created_at: g.created_at, updated_at: g.updated_at });
+// A guest's share code (?via=…): who brought whom. Not secret: it only says who shared the link.
+const refOf = (g) => (g && g.id ? Number(g.id).toString(36) : '');
+const guestShape = (g) => ({ id: g.id, name: g.name, email: g.email, plus: g.plus, names: namesOf(g), invite_code: g.invite_code || '', status: g.status, consent: !!g.consent, via: g.via || null, ref: refOf(g), created_at: g.created_at, updated_at: g.updated_at });
 // Event photos: a JSON list of /api/img/<id>, the first one is the cover
 const photosOf = (e) => { try { const a = JSON.parse(e.photos || '[]'); return Array.isArray(a) ? a.filter((x) => /^\/api\/img\/[a-z0-9]+$/.test(x)) : []; } catch { return []; } };
 // Keep only photos this organizer uploaded, at most 12
@@ -659,9 +662,9 @@ async function api(request, env, url, ctx) {
     const slug = await eventSlug(env, org.id, b, f.title, id);
     const photos = await ownPhotos(env, org, b.photos);
     await env.DB.prepare(
-      `INSERT INTO gl_events (id, org_id, title, starts_at, ends_at, venue, city, details, plus_max, auto_confirm, open, listed, slug, photos)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(id, org.id, f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed, slug, JSON.stringify(photos)).run();
+      `INSERT INTO gl_events (id, org_id, title, starts_at, ends_at, venue, city, details, plus_max, auto_confirm, open, listed, slug, photos, guest_invites)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, org.id, f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed, slug, JSON.stringify(photos), f.guest_invites).run();
     return json({ id, slug }, 201);
   }
   if (seg[0] === 'events' && seg[1]) {
@@ -682,8 +685,8 @@ async function api(request, env, url, ctx) {
       const before = photosOf(e);
       const photos = b.photos === undefined ? before : await ownPhotos(env, org, b.photos);
       await env.DB.prepare(
-        `UPDATE gl_events SET title = ?, starts_at = ?, ends_at = ?, venue = ?, city = ?, details = ?, plus_max = ?, auto_confirm = ?, open = ?, listed = ?, slug = ?, photos = ? WHERE id = ?`
-      ).bind(f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed, slug, JSON.stringify(photos), e.id).run();
+        `UPDATE gl_events SET title = ?, starts_at = ?, ends_at = ?, venue = ?, city = ?, details = ?, plus_max = ?, auto_confirm = ?, open = ?, listed = ?, slug = ?, photos = ?, guest_invites = ? WHERE id = ?`
+      ).bind(f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed, slug, JSON.stringify(photos), f.guest_invites, e.id).run();
       await dropPhotos(env, org, before.filter((u) => !photos.includes(u)));
       return json({ id: e.id });
     }
@@ -988,7 +991,7 @@ async function api(request, env, url, ctx) {
       const updates = (await env.DB.prepare(`SELECT * FROM gl_updates WHERE event_id = ? ${insider ? '' : 'AND guests_only = 0'} ORDER BY id DESC LIMIT 50`).bind(e.id).all()).results;
       return json({
         event: { ...shape, updates: updates.map(updateShape) }, invite,
-        mine: mine ? { name: mine.name, email: mine.email, plus: mine.plus, names: namesOf(mine), invite_code: mine.invite_code || '', status: mine.status, consent: !!mine.consent, has_account: !!person || !!(await env.DB.prepare('SELECT 1 FROM gl_people WHERE email = ?').bind(mine.email).first()) } : null,
+        mine: mine ? { name: mine.name, email: mine.email, plus: mine.plus, names: namesOf(mine), invite_code: mine.invite_code || '', status: mine.status, consent: !!mine.consent, ref: e.guest_invites ? refOf(mine) : '', has_account: !!person || !!(await env.DB.prepare('SELECT 1 FROM gl_people WHERE email = ?').bind(mine.email).first()) } : null,
         person: person ? personShape(person) : null
       });
     }
@@ -1060,7 +1063,13 @@ async function api(request, env, url, ctx) {
         return json({ status, token: prev.token });
       }
       const t = token();
-      const ng = await env.DB.prepare('INSERT INTO gl_guests (event_id, name, email, plus, status, token) VALUES (?, ?, ?, ?, ?, ?) RETURNING *').bind(e.id, name, email, plus, fresh, t).first();
+      // Brought by a guest's share link (?via=): kept so the host sees who brought whom
+      let via = null;
+      if (e.guest_invites && /^[a-z0-9]{1,10}$/.test(String(b.via || ''))) {
+        const vg = await env.DB.prepare('SELECT id FROM gl_guests WHERE id = ? AND event_id = ?').bind(parseInt(b.via, 36), e.id).first();
+        if (vg) via = vg.id;
+      }
+      const ng = await env.DB.prepare('INSERT INTO gl_guests (event_id, name, email, plus, status, token, via) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *').bind(e.id, name, email, plus, fresh, t, via).first();
       const eo = { id: e.org_id, name: e.org_name, handle: e.org_handle };
       await later((async () => { await mailRsvp(env, { event: e, org: eo, guest: { name, email, plus, status: fresh, token: t } }); await followUp(env, e, eo, ng); })());
       return json({ status: fresh, token: t }, 201);

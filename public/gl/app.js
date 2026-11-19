@@ -332,6 +332,7 @@
       '<label class="check"><input type="checkbox" name="auto_confirm"' + (v.auto_confirm ? ' checked' : '') + '><span>Confirm requests automatically<small>Otherwise every RSVP waits for your confirmation.</small></span></label>' +
       '<label class="check"><input type="checkbox" name="open"' + (v.open === false ? '' : ' checked') + '><span>Guestlist open<small>Close it when you are full: the page stays, the form goes.</small></span></label>' +
       '<label class="check"><input type="checkbox" name="listed"' + (v.listed === false ? '' : ' checked') + '><span>Show on my page<small>Otherwise only people with the link see it.</small></span></label>' +
+      '<label class="check"><input type="checkbox" name="guest_invites"' + (v.guest_invites === false ? '' : ' checked') + '><span>Guests can invite friends<small>Guests get a link to share. You see who brought whom; their friends RSVP like everyone else.</small></span></label>' +
       '<p class="err" id="err" hidden></p><div class="acts"><button class="btn" type="submit">' + (id ? 'Save' : 'Create the guestlist') + '</button>' +
       (id ? '<a class="link" href="/e/' + esc(id) + '">Cancel</a>' : '') + '</div></form>';
   }
@@ -424,9 +425,11 @@
       (c.waiting ? '<button class="btn small" data-act="confirmall">Confirm everyone (' + c.waiting + ')</button>' : '') + '</div>';
     if (!current.guests.length) h += '<div class="stack center" style="padding:20px 0"><p class="ornament">· · ·</p><p class="quiet">No one yet. Send the link.</p></div>';
     else {
+      var byId = {}; current.guests.forEach(function (x) { byId[x.id] = x; });
       h += '<div class="list">' + sorted().map(function (g) {
         return '<div class="guest ' + g.status + '"><span class="n">' + esc(g.name) + '<span class="plus">' + plusLabel(g.plus) + '</span>' +
-          (g.names && g.names.length ? '<span class="e" style="display:block;font-size:14px">with ' + esc(g.names.join(', ')) + '</span>' : '') + '</span>' +
+          (g.names && g.names.length ? '<span class="e" style="display:block;font-size:14px">with ' + esc(g.names.join(', ')) + '</span>' : '') +
+          (g.via && byId[g.via] ? '<span class="e" style="display:block;font-size:12px">via ' + esc(byId[g.via].name) + '</span>' : '') + '</span>' +
           '<span class="s">' + (g.status === 'confirmed' ? '<button class="tag confirmed" data-act="status" data-id="' + g.id + '" data-to="requested" title="Tap to undo">Confirmed</button>'
             : g.status === 'declined' ? '<button class="tag declined" data-act="status" data-id="' + g.id + '" data-to="requested" title="Tap to undo">Declined</button>'
             : '<button class="btn small" data-act="status" data-id="' + g.id + '" data-to="confirmed">Confirm</button><button class="link small" data-act="status" data-id="' + g.id + '" data-to="declined">Decline</button>') + '</span>' +
@@ -607,6 +610,7 @@
   function viewGuest(id) {
     loading();
     var t = tokenFor(id), inv = inviteFor(id);
+    var via0 = new URLSearchParams(location.search).get('via'); if (via0) { try { sessionStorage.setItem('via:' + id, via0); } catch (e) {} }
     var qs = [t ? 't=' + encodeURIComponent(t) : '', inv ? 'inv=' + encodeURIComponent(inv) : ''].filter(Boolean).join('&');
     api('GET', '/p/' + id + (qs ? '?' + qs : '')).then(function (j) {
       var e = j.event, host = e.host, h = '<div class="stack lg">';
@@ -625,7 +629,7 @@
       if (e.details || ph.length > 1) h += '<hr class="rule">';
       if (j.invite && !j.invite.mine && j.invite.used) h += '<div class="card"><p class="sc">Invitation</p><h2>This link has already been used.</h2><p class="quiet small">Ask ' + esc(host.name) + ' for a new one.</p></div>';
       else if (j.invite && !(j.mine && j.mine.invite_code === j.invite.code)) h += inviteForm(e, j.invite, person || j.mine || {});
-      else if (j.mine) h += statusCard(e, j.mine, id) + afterRsvp(e, j.mine, id);
+      else if (j.mine) h += statusCard(e, j.mine, id) + inviteFriends(e, j.mine) + afterRsvp(e, j.mine, id);
       else if (!e.open) h += '<div class="card"><h2>The guestlist is closed.</h2><p class="quiet">Thank you for your interest.</p></div>';
       else h += rsvpForm(e, person || {});
       main.innerHTML = h + '</div>';
@@ -664,6 +668,18 @@
   }
   // After the RSVP: receive the next invitations here, with a password.
   // After the RSVP: join the organizer's page to get their next invitations, and keep them here with a password.
+  // Guests share the event with friends (when the host allows it): their link carries ?via= so the host sees who brought whom
+  function inviteFriends(e, m) {
+    if (!m.ref || m.status === 'declined' || !e.open) return '';
+    var url = location.origin + eventPath(e, e.host.handle) + '?via=' + m.ref;
+    var msg = 'Join me at ' + e.title + (parse(e.starts_at) ? ' (' + shortDate(e.starts_at) + ')' : '') + '. RSVP here: ' + url;
+    return '<div class="box"><span class="sc">Invite friends</span><p class="quiet small">Send them your link. They RSVP on the guestlist' + (e.host ? ', and ' + esc(e.host.name) + ' sees they came through you' : '') + '.</p>' +
+      '<div class="copyfield"><input readonly value="' + esc(url) + '" onclick="this.select()" style="font-size:14px"><button class="btn small" data-act="copylink" data-id="' + esc(url) + '">Copy</button></div>' +
+      '<div class="acts small">' + (navigator.share ? '<button class="btn small line" data-act="sharefriends" data-id="' + esc(url) + '" data-text="' + esc(msg) + '">Share…</button>' : '') +
+      '<a class="btn small line" href="https://wa.me/?text=' + encodeURIComponent(msg) + '" target="_blank" rel="noopener">WhatsApp</a>' +
+      '<a class="btn small line" href="sms:?&body=' + encodeURIComponent(msg) + '">Message</a>' +
+      '<a class="btn small line" href="mailto:?subject=' + encodeURIComponent(e.title) + '&body=' + encodeURIComponent(msg) + '">Email</a></div></div>';
+  }
   function afterRsvp(e, m, id) {
     var host = esc(e.host.name), ask = e.host.join === 'approval';
     if (m.consent && ask) return '<p class="quiet small center">You asked to join ' + host + '\'s community. Once they confirm, their next invitations reach you.</p>' + (person ? pushBox({}) : '');
@@ -812,6 +828,7 @@
     if (act === 'rmupdphoto') { var fu = document.getElementById('f-update'); fu.elements.namedItem('photo').value = ''; document.getElementById('upd-photo').innerHTML = ''; return; }
     if (act === 'loginas') { go('/login' + (id === 'guest' ? '?as=guest' : ''), true); return; }
     if (act === 'copylink') return copy(id, 'Link copied.');
+    if (act === 'sharefriends') { navigator.share({ title: document.title, text: b.getAttribute('data-text'), url: id }).catch(function () {}); return; }
     if (act === 'sharelink') { navigator.share({ title: current.event.title, url: id }).catch(function () {}); return; }
     if (act === 'copytext') return copy(listText(), 'List copied.');
     if (act === 'slots') { current.slots = Math.max(1, Math.min(20, current.slots + Number(id))); var lb = document.getElementById('inv-label'); var keep = lb ? lb.value : ''; renderManage(); var lb2 = document.getElementById('inv-label'); if (lb2) lb2.value = keep; return; }
@@ -821,8 +838,9 @@
       return;
     }
     if (act === 'csv') {
-      return csvDownload([['Name', 'Email', 'Plus ones', 'People', 'Other names', 'Status', 'Keep me posted', 'Requested at']].concat(sorted().map(function (g) {
-        return [g.name, g.email, g.plus, 1 + g.plus, (g.names || []).join('; '), g.status, g.consent ? 'yes' : 'no', g.created_at];
+      var byIdC = {}; current.guests.forEach(function (x) { byIdC[x.id] = x; });
+      return csvDownload([['Name', 'Email', 'Plus ones', 'People', 'Other names', 'Status', 'Keep me posted', 'Invited by', 'Requested at']].concat(sorted().map(function (g) {
+        return [g.name, g.email, g.plus, 1 + g.plus, (g.names || []).join('; '), g.status, g.consent ? 'yes' : 'no', g.via && byIdC[g.via] ? byIdC[g.via].name : '', g.created_at];
       })), fileSafe(current.event.title) + '-guestlist.csv');
     }
     if (act === 'commcsv') {
@@ -981,6 +999,7 @@
         d.inv = f.getAttribute('data-inv'); d.t = tokenFor(gid) || undefined; d.names = [];
         for (var k = 1; k < Number(f.getAttribute('data-slots')); k++) if (d['n' + k]) d.names.push(d['n' + k]);
       }
+      try { d.via = sessionStorage.getItem('via:' + gid) || undefined; } catch (e) {}
       api('POST', '/p/' + gid + '/rsvp', d).then(function (r) {
         try { localStorage.setItem('gl:' + gid, r.token); } catch (e) {}
         history.replaceState({}, '', location.pathname + '?t=' + encodeURIComponent(r.token));
