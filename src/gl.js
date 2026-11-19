@@ -147,7 +147,7 @@ async function ensureSchema(env) {
   ]);
   await addColumns(env, 'gl_orgs', [
     ['handle', 'TEXT'], ['bio', "TEXT NOT NULL DEFAULT ''"], ['logo', "TEXT NOT NULL DEFAULT ''"],
-    ['theme', "TEXT NOT NULL DEFAULT 'creme'"], ['visibility', "TEXT NOT NULL DEFAULT 'public'"], ['invite_token', 'TEXT'],
+    ['theme', "TEXT NOT NULL DEFAULT 'creme'"], ['visibility', "TEXT NOT NULL DEFAULT 'public'"], ['join_mode', "TEXT NOT NULL DEFAULT 'open'"], ['invite_token', 'TEXT'],
     ['custom_theme', "TEXT NOT NULL DEFAULT ''"], ['v1_user_id', 'INTEGER']
   ]);
   await addColumns(env, 'gl_guests', [['consent', 'INTEGER NOT NULL DEFAULT 0'], ['names', "TEXT NOT NULL DEFAULT ''"], ['invite_code', 'TEXT'], ['msg_at', "TEXT NOT NULL DEFAULT ''"]]);
@@ -243,9 +243,9 @@ async function startPersonSession(env, personId, url) {
 // ---------- shapes ----------
 const orgShape = (o) => ({
   name: o.name, kind: o.kind, email: o.email, handle: o.handle, bio: o.bio || '', logo: o.logo || '',
-  theme: themeOf(o.theme, customOf(o)), custom: customOf(o), visibility: o.visibility || 'public', invite_token: o.invite_token
+  theme: themeOf(o.theme, customOf(o)), custom: customOf(o), visibility: o.visibility || 'public', join: o.join_mode === 'approval' ? 'approval' : 'open', invite_token: o.invite_token
 });
-const publicOrg = (o) => ({ name: o.name, kind: o.kind, handle: o.handle, bio: o.bio || '', logo: o.logo || '', theme: themeOf(o.theme, customOf(o)), custom: customOf(o), visibility: o.visibility || 'public' });
+const publicOrg = (o) => ({ name: o.name, kind: o.kind, handle: o.handle, bio: o.bio || '', logo: o.logo || '', theme: themeOf(o.theme, customOf(o)), custom: customOf(o), visibility: o.visibility || 'public', join: o.join_mode === 'approval' ? 'approval' : 'open' });
 const personShape = (p) => ({ name: p.name, email: p.email });
 
 function eventFields(b) {
@@ -320,7 +320,12 @@ async function ownEvent(env, org, id) {
   return e;
 }
 // Add someone to an organizer's community. A member stays a member; consent only goes up unless they say no.
-async function upsertContact(env, orgId, { email, name, status, consent, source, note }) {
+// A host can ask to confirm everyone who joins (join_mode 'approval'): joining then makes a request, except through the host's own invitation links (invited).
+async function upsertContact(env, orgId, { email, name, status, consent, source, note, invited }) {
+  if (status === 'member' && !invited) {
+    const o = await env.DB.prepare('SELECT join_mode FROM gl_orgs WHERE id = ?').bind(orgId).first();
+    if (o && o.join_mode === 'approval') status = 'requested';
+  }
   const prev = await env.DB.prepare('SELECT * FROM gl_contacts WHERE org_id = ? AND email = ?').bind(orgId, email).first();
   if (!prev) {
     await env.DB.prepare('INSERT INTO gl_contacts (org_id, email, name, status, consent, source, note) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -534,6 +539,7 @@ async function api(request, env, url, ctx) {
     }
     const theme = b.theme === 'custom' && custom ? 'custom' : THEMES.includes(b.theme) ? b.theme : themeOf(org.theme, customOf(org));
     const visibility = b.visibility === 'private' ? 'private' : b.visibility === 'public' ? 'public' : org.visibility;
+    const joinMode = b.join === 'approval' ? 'approval' : b.join === 'open' ? 'open' : org.join_mode || 'open';
     let handle = org.handle;
     if (typeof b.handle === 'string' && b.handle.trim().toLowerCase().replace(/^@/, '') !== org.handle) {
       handle = b.handle.trim().toLowerCase().replace(/^@/, '');
@@ -542,9 +548,9 @@ async function api(request, env, url, ctx) {
       if (await env.DB.prepare('SELECT 1 FROM gl_orgs WHERE handle = ? AND id != ?').bind(handle, org.id).first()) fail(409, 'That address is taken.');
       if (await env.DB.prepare('SELECT 1 FROM gl_events WHERE id = ?').bind(handle).first()) fail(409, 'That address is taken.');
     }
-    await env.DB.prepare('UPDATE gl_orgs SET name = ?, kind = ?, bio = ?, theme = ?, visibility = ?, handle = ?, custom_theme = ? WHERE id = ?')
-      .bind(name, kind, bio, theme, visibility, handle, custom, org.id).run();
-    return json({ org: orgShape({ ...org, name, kind, bio, theme, visibility, handle, custom_theme: custom }) });
+    await env.DB.prepare('UPDATE gl_orgs SET name = ?, kind = ?, bio = ?, theme = ?, visibility = ?, join_mode = ?, handle = ?, custom_theme = ? WHERE id = ?')
+      .bind(name, kind, bio, theme, visibility, joinMode, handle, custom, org.id).run();
+    return json({ org: orgShape({ ...org, name, kind, bio, theme, visibility, join_mode: joinMode, handle, custom_theme: custom }) });
   }
   if (path === '/api/me/logo' && method === 'POST') {
     need();
@@ -834,7 +840,7 @@ async function api(request, env, url, ctx) {
     if (seg.length === 2 && method === 'GET') {
       const inviteOk = !!url.searchParams.get('i') && url.searchParams.get('i') === o.invite_token;
       let mine = person ? await memberOf(env, o.id, person.email) : null;
-      if (inviteOk && person && mine !== 'member') { await upsertContact(env, o.id, { email: person.email, name: person.name, status: 'member', consent: true, source: 'invitation link' }); mine = 'member'; }
+      if (inviteOk && person && mine !== 'member') { await upsertContact(env, o.id, { email: person.email, name: person.name, status: 'member', consent: true, source: 'invitation link', invited: true }); mine = 'member'; }
       const isOwner = !!org && org.id === o.id;
       const access = o.visibility === 'public' || inviteOk || isOwner || mine === 'member';
       const events = access ? (await env.DB.prepare(`SELECT * FROM gl_events e WHERE e.org_id = ? AND (e.listed = 1 OR ${isOwner ? 1 : 0}) AND ${UPCOMING} ORDER BY CASE WHEN e.starts_at = '' THEN 1 ELSE 0 END, e.starts_at`).bind(o.id).all()).results.map(eventShape) : [];
@@ -853,7 +859,7 @@ async function api(request, env, url, ctx) {
       const open = o.visibility === 'public' || inviteOk;
       const status = await upsertContact(env, o.id, {
         email, name, status: open ? 'member' : 'requested', consent: true,
-        source: open ? (inviteOk ? 'invitation link' : 'page') : 'request', note: str(b.note, 300)
+        source: open ? (inviteOk ? 'invitation link' : 'page') : 'request', note: str(b.note, 300), invited: inviteOk
       });
       const headers = {};
       let created = null;
@@ -870,9 +876,9 @@ async function api(request, env, url, ctx) {
 
   // --- public: an event page ---
   if (seg[0] === 'p' && seg[1]) {
-    const e = await env.DB.prepare('SELECT e.*, o.name AS org_name, o.kind AS org_kind, o.handle AS org_handle, o.logo AS org_logo, o.theme AS org_theme, o.custom_theme AS org_custom_theme, o.visibility AS org_visibility FROM gl_events e JOIN gl_orgs o ON o.id = e.org_id WHERE e.id = ?').bind(String(seg[1])).first();
+    const e = await env.DB.prepare('SELECT e.*, o.name AS org_name, o.kind AS org_kind, o.handle AS org_handle, o.logo AS org_logo, o.theme AS org_theme, o.custom_theme AS org_custom_theme, o.visibility AS org_visibility, o.join_mode AS org_join FROM gl_events e JOIN gl_orgs o ON o.id = e.org_id WHERE e.id = ?').bind(String(seg[1])).first();
     if (!e) fail(404, 'This guestlist does not exist.');
-    const shape = { ...eventShape(e), host: { name: e.org_name, kind: e.org_kind, handle: e.org_handle, logo: e.org_logo || '', theme: themeOf(e.org_theme, customOf(e)), custom: customOf(e), visibility: e.org_visibility } };
+    const shape = { ...eventShape(e), host: { name: e.org_name, kind: e.org_kind, handle: e.org_handle, logo: e.org_logo || '', theme: themeOf(e.org_theme, customOf(e)), custom: customOf(e), visibility: e.org_visibility, join: e.org_join === 'approval' ? 'approval' : 'open' } };
     delete shape.auto_confirm;
     if (seg.length === 2 && method === 'GET') {
       const t = url.searchParams.get('t');
@@ -903,7 +909,7 @@ async function api(request, env, url, ctx) {
       if (!g && person) g = await env.DB.prepare('SELECT * FROM gl_guests WHERE event_id = ? AND email = ?').bind(e.id, person.email).first();
       if (!g) fail(403, 'RSVP first.');
       await env.DB.prepare('UPDATE gl_guests SET consent = 1 WHERE id = ?').bind(g.id).run();
-      await upsertContact(env, e.org_id, { email: g.email, name: g.name, status: 'member', consent: true, source: 'rsvp · ' + e.title.slice(0, 60) });
+      const joined = await upsertContact(env, e.org_id, { email: g.email, name: g.name, status: 'member', consent: true, source: 'rsvp · ' + e.title.slice(0, 60) });
       const headers = {};
       let created = null;
       if (!person && b.password) {
@@ -912,7 +918,7 @@ async function api(request, env, url, ctx) {
         created = await env.DB.prepare('INSERT INTO gl_people (email, name, password_hash) VALUES (?, ?, ?) RETURNING *').bind(g.email, g.name, await hashPassword(String(b.password))).first();
         headers['set-cookie'] = await startPersonSession(env, created.id, url);
       }
-      return json({ ok: true, person: created ? personShape(created) : null }, 200, headers);
+      return json({ ok: true, status: joined, person: created ? personShape(created) : null }, 200, headers);
     }
     if (seg[2] === 'rsvp' && method === 'POST') {
       const b = await body(request);
@@ -929,7 +935,7 @@ async function api(request, env, url, ctx) {
         if (g && !(b.t && b.t === g.token) && !(person && person.email === g.email)) fail(409, 'This invitation link has already been used.');
         if (g && g.email !== email && await env.DB.prepare('SELECT 1 FROM gl_guests WHERE event_id = ? AND email = ? AND id != ?').bind(e.id, email, g.id).first()) fail(409, 'That email is already on the list.');
         if (!g) g = await env.DB.prepare('SELECT * FROM gl_guests WHERE event_id = ? AND email = ?').bind(e.id, email).first();
-        await upsertContact(env, e.org_id, { email, name, status: 'member', source: 'invitation · ' + e.title.slice(0, 60) });
+        await upsertContact(env, e.org_id, { email, name, status: 'member', source: 'invitation · ' + e.title.slice(0, 60), invited: true });
         let t;
         if (g) {
           t = g.token;

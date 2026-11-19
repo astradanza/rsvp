@@ -240,6 +240,10 @@
       '<label><input type="radio" name="visibility" value="public"' + (org.visibility !== 'private' ? ' checked' : '') + '><span>Everyone</span></label>' +
       '<label><input type="radio" name="visibility" value="private"' + (org.visibility === 'private' ? ' checked' : '') + '><span>By invitation</span></label></div>' +
       '<p class="quiet small">By invitation: visitors see your name, logo and bio, and can request an invitation. People you accept, people who RSVP\'d to one of your events, and people with your invitation link see your events.</p></div>' +
+      '<div class="stack" style="gap:8px"><span class="sc" style="font-size:13px">Who can join your community</span><div class="seg">' +
+      '<label><input type="radio" name="join" value="open"' + (org.join !== 'approval' ? ' checked' : '') + '><span>Anyone</span></label>' +
+      '<label><input type="radio" name="join" value="approval"' + (org.join === 'approval' ? ' checked' : '') + '><span>On request</span></label></div>' +
+      '<p class="quiet small">On request: everyone who joins your page or RSVPs asks to join, and you confirm them in Community. People with your invitation links join right away.</p></div>' +
       '<p class="err" id="err" hidden></p><button class="btn" type="submit">Save</button></form>' +
       '<div class="box"><span class="sc">Invitation link to your page</span><span class="linkline">' + esc(inv.replace(/^https?:\/\//, '')) + '</span>' +
       '<p class="quiet small">Whoever opens it can see your events and join your community, even when your page is by invitation.</p>' +
@@ -505,7 +509,7 @@
 
   // ---------- guests: an organizer's page ----------
   function joinForm(o, mode, inviteToken) {
-    // mode: 'post' (keep me posted) or 'request' (request an invitation)
+    // mode: 'post' (keep me posted), 'ask' (ask to join, the host confirms) or 'request' (request an invitation)
     var p = person;
     return '<form id="f-join" data-handle="' + esc(o.handle) + '" data-i="' + esc(inviteToken || '') + '">' +
       (p ? '<p class="quiet center">As ' + esc(p.name) + ' · ' + esc(p.email) + '</p>' :
@@ -513,7 +517,7 @@
         '<label><span>Email</span><input name="email" type="email" required autocomplete="email"></label>') +
       (mode === 'request' ? '<label><span>A word for ' + esc(o.name) + ' (optional)</span><input name="note" maxlength="300" placeholder="Who you know, where we met…"></label>' : '') +
       (p ? '' : '<label><span>Password (optional)</span><input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="To receive invitations here on rsvp.fm"></label>') +
-      '<p class="err" id="err" hidden></p><button class="btn wide" type="submit">' + (mode === 'request' ? 'Request an invitation' : 'Join ' + esc(o.name)) + '</button>' +
+      '<p class="err" id="err" hidden></p><button class="btn wide" type="submit">' + (mode === 'request' ? 'Request an invitation' : mode === 'ask' ? 'Ask to join ' + esc(o.name) : 'Join ' + esc(o.name)) + '</button>' +
       '<p class="quiet small center">By joining, you agree that ' + esc(o.name) + ' emails you their next invitations.</p></form>';
   }
   function viewOrg(handle) {
@@ -536,7 +540,8 @@
         else h += '<p class="quiet">No upcoming events yet.</p>';
         h += '</div>';
         if (j.my_status === 'member') h += '<div class="card"><p class="sc">Community</p><h2>You\'re in.</h2><p class="quiet small">' + esc(o.name) + '\'s next invitations land in <a href="/me">My invitations</a>.</p></div>' + pushBox({});
-        else if (!j.is_owner) h += '<div class="stack"><h3>Keep me posted</h3><p class="quiet small">Be the first to hear about ' + esc(o.name) + '\'s next guestlists.</p>' + joinForm(o, 'post', i) + '</div>';
+        else if (j.my_status === 'requested') h += '<div class="card"><p class="sc">Community</p><h2>Your request is in.</h2><p class="quiet small">' + esc(o.name) + ' confirms who joins. Once you\'re in, their next invitations land in <a href="/me">My invitations</a>.</p></div>';
+        else if (!j.is_owner) h += '<div class="stack"><h3>Keep me posted</h3><p class="quiet small">Be the first to hear about ' + esc(o.name) + '\'s next guestlists.' + (o.join === 'approval' && !j.invited ? ' ' + esc(o.name) + ' confirms who joins.' : '') + '</p>' + joinForm(o, o.join === 'approval' && !j.invited ? 'ask' : 'post', i) + '</div>';
       } else if (j.my_status === 'requested') {
         h += '<div class="card"><p class="sc">By invitation</p><h2>Your request is in.</h2><p class="quiet small">' + esc(o.name) + ' will let you in. You\'ll find their events in <a href="/me">My invitations</a>.</p></div>';
       } else {
@@ -611,7 +616,8 @@
   // After the RSVP: receive the next invitations here, with a password.
   // After the RSVP: join the organizer's page to get their next invitations, and keep them here with a password.
   function afterRsvp(e, m, id) {
-    var host = esc(e.host.name);
+    var host = esc(e.host.name), ask = e.host.join === 'approval';
+    if (m.consent && ask) return '<p class="quiet small center">You asked to join ' + host + '\'s community. Once they confirm, their next invitations reach you.</p>' + (person ? pushBox({}) : '');
     if (m.consent) {
       if (person) return '<p class="quiet small center">You\'re in ' + host + '\'s community. Their next invitations land in <a href="/me">My invitations</a>.</p>' + pushBox({});
       if (m.has_account) return '<p class="quiet small center">You\'re in ' + host + '\'s community. <a href="/login?as=guest&amp;next=' + encodeURIComponent('/' + id) + '">Log in</a> to see all your invitations.</p>';
@@ -625,7 +631,7 @@
       '<p class="quiet small">Be the first to receive their next invitations.</p>' +
       '<form id="f-keep" data-id="' + esc(id) + '">' +
       (withPassword ? '<label><span>Password (optional)</span><input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="To find them here on rsvp.fm"></label>' : '') +
-      '<p class="err" hidden></p><button class="btn" type="submit">Join ' + host + '</button>' +
+      '<p class="err" hidden></p><button class="btn" type="submit">' + (ask ? 'Ask to join ' : 'Join ') + host + '</button>' +
       '<p class="quiet small">By joining, you agree that ' + host + ' emails you their next invitations.</p></form></div>';
   }
 
@@ -936,7 +942,7 @@
       var kid = f.getAttribute('data-id');
       api('POST', '/p/' + kid + '/keep', { t: tokenFor(kid), password: d.password || '' }).then(function (r) {
         if (r.person) person = r.person;
-        say('You joined. Their next invitations will reach you.'); viewGuest(kid);
+        say(r.status === 'requested' ? 'Request sent. They confirm who joins.' : 'You joined. Their next invitations will reach you.'); viewGuest(kid);
       }).catch(fail);
     } else if (f.id === 'f-join') {
       d.i = f.getAttribute('data-i');
