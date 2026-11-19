@@ -4,7 +4,6 @@
   var main = document.getElementById('main');
   var hdr = document.getElementById('hdr');
   var org = null, person = null, mailOn = false;
-  var KINDS = { promoter: 'Promoter', label: 'Label', artist: 'Artist', club: 'Club' };
   var DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   // Six themes for organizer pages: colors and type. Fonts load when a theme is shown.
@@ -152,7 +151,7 @@
         var key = a.type === 'guest' ? 'guest' : a.handle;
         return '<button class="acct-row' + (a.active ? ' on' : '') + '" data-act="switchacct" data-id="' + esc(key) + '">' +
           '<span class="acct-av">' + (a.logo ? '<img src="' + esc(a.logo) + '" alt="">' : esc(String(a.name || '?').charAt(0).toUpperCase())) + '</span>' +
-          '<span class="acct-t"><b>' + esc(a.name) + '</b><small>' + (a.type === 'guest' ? 'Guest · ' + esc(a.email) : '@' + esc(a.handle)) + '</small></span>' +
+          '<span class="acct-t"><b>' + esc(a.name) + '</b><small>' + (a.type === 'guest' ? esc(a.email) : '@' + esc(a.handle)) + '</small></span>' +
           '<span class="switch' + (a.active ? ' on' : '') + '" aria-hidden="true"><i></i></span></button>';
       }).join('') +
         '<div class="acts small"><a class="link small" href="/login?add=1">Add an account</a>' +
@@ -167,7 +166,6 @@
   function viewWelcome() {
     header();
     main.innerHTML = '<div class="stack lg">' +
-      '<p class="sc">For promoters, labels &amp; artists</p>' +
       '<h1>The guestlist,<br><em>kept simply.</em></h1>' +
       '<p class="lead">Your page, your events, one link each. Your guests leave their name and RSVP; you confirm the list and take it to the door. They can ask to receive your next invitations.</p>' +
       '<div class="acts"><a class="btn" href="/signup">Create an account</a><a class="btn line" href="/login">Log in</a></div>' +
@@ -178,17 +176,11 @@
       '<div><h2><em>iii.</em> Your community</h2><p class="quiet">Everyone who RSVPs can ask to be kept posted. Next time, they hear from you first.</p></div>' +
       '</div></div>';
   }
-  function kindSeg(current) {
-    return '<fieldset style="border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:6px"><span class="sc" style="font-size:13px">You are</span><div class="seg">' +
-      ['promoter', 'label', 'artist', 'club'].map(function (k) { return '<label><input type="radio" name="kind" value="' + k + '"' + ((current || 'promoter') === k ? ' checked' : '') + '><span>' + KINDS[k] + '</span></label>'; }).join('') +
-      '</div></fieldset>';
-  }
   function viewSignup() {
     header();
-    main.innerHTML = '<div class="stack lg"><div class="stack"><p class="sc">Organizers</p><h1>Create an account</h1></div>' +
+    main.innerHTML = '<div class="stack lg"><div class="stack"><h1>Create an account</h1></div>' +
       '<form id="f-signup">' +
-      '<label><span>Name guests will see</span><input name="name" maxlength="80" required placeholder="Your label, collective or artist name" autocomplete="organization"></label>' +
-      kindSeg('promoter') +
+      '<label><span>Name guests will see</span><input name="name" maxlength="80" required placeholder="Your name, or your collective\'s" autocomplete="organization"></label>' +
       '<label><span>Email</span><input name="email" type="email" required autocomplete="email"></label>' +
       '<label><span>Password</span><input name="password" type="password" minlength="8" required autocomplete="new-password"></label>' +
       '<p class="err" id="err" hidden></p><button class="btn wide" type="submit">Create my account</button></form>' +
@@ -196,13 +188,13 @@
   }
   function viewLogin() {
     header();
-    main.innerHTML = '<div class="stack lg"><div class="stack"><p class="sc">Organizers &amp; guests</p><h1>' + (/[?&]add=1/.test(location.search) && (org || person) ? 'Add an account' : 'Log in') + '</h1></div>' +
+    main.innerHTML = '<div class="stack lg"><div class="stack"><h1>' + (/[?&]add=1/.test(location.search) && (org || person) ? 'Add an account' : 'Log in') + '</h1></div>' +
       '<form id="f-login"><label><span>Email or handle</span><input name="email" required autocomplete="username" autocapitalize="none"></label>' +
       '<label><span>Password</span><input name="password" type="password" required autocomplete="current-password"></label>' +
       '<p class="err" id="err" hidden></p><button class="btn wide" type="submit">Log in</button></form>' +
       '<p class="small center"><a href="/forgot">Forgot your password?</a></p>' +
       '<p class="quiet small center">Your rsvp.fm account works here: same email, same password.</p>' +
-      '<p class="quiet small center">Promoter, label, artist or club? <a href="/signup">Create an organizer account</a></p></div>';
+      '<p class="quiet small center">No account yet? <a href="/signup">Create one</a></p></div>';
   }
 
   // ---------- forgotten password: a magic link by email ----------
@@ -243,7 +235,6 @@
       '<form id="f-account">' +
       '<label><span>Address</span><span class="prefix"><em>' + esc(location.host) + '/</em><input name="handle" maxlength="30" required autocapitalize="none" autocomplete="off" value="' + esc(org.handle) + '"></span></label>' +
       '<label><span>Name</span><input name="name" maxlength="80" required value="' + esc(org.name) + '"></label>' +
-      kindSeg(org.kind) +
       '<label><span>Bio</span><textarea name="bio" maxlength="600" placeholder="A few words about you, your nights, your music.">' + esc(org.bio) + '</textarea></label>' +
       '<div class="stack" style="gap:8px"><span class="sc" style="font-size:13px">Who can see your events</span><div class="seg">' +
       '<label><input type="radio" name="visibility" value="public"' + (org.visibility !== 'private' ? ' checked' : '') + '><span>Everyone</span></label>' +
@@ -534,7 +525,7 @@
       document.title = o.name + ' — rsvp.fm';
       var h = '<div class="stack lg">';
       if (j.is_owner) h += '<p class="quiet small center">This is your page · <a href="/account">Edit</a></p>';
-      h += '<div class="stack center">' + logoImg(o.logo) + '<h1>' + esc(o.name) + '</h1><p class="sc">' + esc(KINDS[o.kind] || '') + '</p>' + (o.bio ? '<p class="bio">' + esc(o.bio) + '</p>' : '') + '</div>';
+      h += '<div class="stack center">' + logoImg(o.logo) + '<h1>' + esc(o.name) + '</h1>' + (o.bio ? '<p class="bio">' + esc(o.bio) + '</p>' : '') + '</div>';
       h += '<p class="ornament">· · ·</p>';
       if (j.access) {
         h += '<div class="stack"><h3>Upcoming</h3>';
@@ -719,7 +710,7 @@
       }).join('') + '</div>';
       else h += '<p class="quiet">No invitations right now. They will appear here as soon as the pages you follow open a guestlist.</p>';
       if (j.pages.length) h += '<div class="stack"><h3>Pages</h3><div class="list">' + j.pages.map(function (o) {
-        return '<a class="item" href="/' + esc(o.handle) + '"><span class="main"><span class="t">' + esc(o.name) + '</span><span class="m">' + esc(KINDS[o.kind] || '') + (o.my_status === 'requested' ? ' · invitation requested' : '') + '</span></span></a>';
+        return '<a class="item" href="/' + esc(o.handle) + '"><span class="main"><span class="t">' + esc(o.name) + '</span><span class="m">' + (o.my_status === 'requested' ? 'Invitation requested' : '') + '</span></span></a>';
       }).join('') + '</div></div>';
       h += pushBox({});
       h += '<div id="prefs-slot"></div>';
