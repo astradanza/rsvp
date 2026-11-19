@@ -1007,5 +1007,59 @@ export async function handleGuestlist(request, env, url, ctx) {
   const target = new URL(file ? '/gl/' + file[1] : '/gl/', url);
   const res = await env.ASSETS.fetch(new Request(target, request));
   if (file) return res;
-  return new Response(res.body, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' } });
+  let html = await res.text();
+  try { html = withPreview(html, await previewFor(env, url)); } catch (e) { console.error(e); }
+  return new Response(html, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' } });
+}
+
+// Link previews (WhatsApp, iMessage, Instagram, X…): an event shows its title and photo, or the host's logo; a page shows its name and logo
+const DAYS3 = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], MONTHS3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function previewDate(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?/.exec(String(s || '')); if (!m) return '';
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return `${DAYS3[d.getUTCDay()]} ${+m[3]} ${MONTHS3[+m[2] - 1]}` + (m[4] ? ` · ${m[4]}:${m[5]}` : '');
+}
+async function previewFor(env, url) {
+  const seg = url.pathname.split('/').filter(Boolean).map((x) => decodeURIComponent(x).toLowerCase());
+  if (!seg.length || seg.length > 2) return null;
+  await ensureSchema(env);
+  const Q = 'SELECT e.*, o.name AS org_name, o.handle AS org_handle, o.logo AS org_logo FROM gl_events e JOIN gl_orgs o ON o.id = e.org_id';
+  let e = null, o = null;
+  if (seg.length === 2 && seg[0] === 'e') e = await env.DB.prepare(Q + ' WHERE e.id = ?').bind(seg[1]).first();
+  else if (seg.length === 2 && seg[0] === 'i') {
+    const iv = await env.DB.prepare('SELECT event_id FROM gl_invites WHERE code = ?').bind(seg[1]).first();
+    if (iv) e = await env.DB.prepare(Q + ' WHERE e.id = ?').bind(iv.event_id).first();
+    else o = await env.DB.prepare("SELECT * FROM gl_orgs WHERE invite_token = ?").bind(seg[1]).first();
+  } else if (seg.length === 2) e = await env.DB.prepare(Q + ' WHERE o.handle = ? AND e.slug = ?').bind(seg[0], seg[1]).first();
+  else if (!RESERVED.has(seg[0])) {
+    o = await env.DB.prepare('SELECT * FROM gl_orgs WHERE handle = ?').bind(seg[0]).first();
+    if (!o) e = await env.DB.prepare(Q + ' WHERE e.id = ?').bind(seg[0]).first();
+  }
+  const abs = (p) => (p ? (/^https?:/.test(p) ? p : url.origin + p) : '');
+  if (e) {
+    const photo = photosOf(e)[0];
+    const where = [e.venue, e.city].filter(Boolean).join(', ');
+    return {
+      title: e.title, image: abs(photo || e.org_logo), large: !!photo,
+      description: [previewDate(e.starts_at), where, 'Hosted by ' + e.org_name].filter(Boolean).join(' · '),
+      url: url.origin + url.pathname
+    };
+  }
+  if (o) return { title: o.name, image: abs(o.logo), large: false, description: o.bio || `${o.name} on rsvp.fm`, url: `${url.origin}/${o.handle}` };
+  return null;
+}
+function withPreview(html, p) {
+  if (!p) return html;
+  const a = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const tags = [
+    `<meta property="og:type" content="website">`, `<meta property="og:site_name" content="rsvp.fm">`,
+    `<meta property="og:title" content="${a(p.title)}">`, `<meta property="og:description" content="${a(p.description)}">`,
+    `<meta property="og:url" content="${a(p.url)}">`,
+    p.image ? `<meta property="og:image" content="${a(p.image)}"><meta name="twitter:image" content="${a(p.image)}">` : '',
+    `<meta name="twitter:card" content="${p.image && p.large ? 'summary_large_image' : 'summary'}">`,
+    `<meta name="twitter:title" content="${a(p.title)}"><meta name="twitter:description" content="${a(p.description)}">`
+  ].join('');
+  return html.replace(/<title>[^<]*<\/title>/, `<title>${a(p.title)} · rsvp.fm</title>`)
+    .replace(/<meta name="description" content="[^"]*">/, `<meta name="description" content="${a(p.description)}">`)
+    .replace('</head>', tags + '</head>');
 }
