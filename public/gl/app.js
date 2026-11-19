@@ -610,7 +610,7 @@
     return '<div class="card"><p class="sc">' + (ok ? 'Confirmed' : no ? 'Guestlist' : 'Request sent') + '</p>' +
       '<h2>' + (ok ? 'You\'re on the list.' : no ? 'The list is full.' : 'Your request is in.') + '</h2>' +
       '<p class="quiet">' + esc(m.name) + plusLabel(m.plus) + '</p>' +
-      '<p class="quiet small">' + (ok ? 'See you there.' : no ? esc(e.host.name) + ' could not add you this time.' : esc(e.host.name) + ' will confirm. Come back to this page to see your status.') + '</p>' +
+      '<p class="quiet small">' + (ok ? 'See you there.' : no ? esc(e.host.name) + ' could not add you this time.' : esc(e.host.name) + ' will confirm. Come back to this page or check your email to see your status update.') + '</p>' +
       (!no && e.open ? '<p><button class="link small" data-act="editrsvp" data-id="' + esc(id) + '">Change my RSVP</button></p>' : '') + '</div>';
   }
   // After the RSVP: receive the next invitations here, with a password.
