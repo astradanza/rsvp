@@ -131,9 +131,9 @@
   // Back office pages use the house look; guest-facing pages wear the organizer's theme.
   function header(kind) {
     var h = '<a class="wordmark" href="/">rsvp<em>.fm</em></a>';
-    if (kind === 'guest') h += person ? '<nav class="nav"><a href="/me">My invitations</a></nav>' : '<span class="sc">Guestlist</span>';
+    if (kind === 'guest') h += person ? '<nav class="nav"><a href="/me" data-nav="me">Invitations</a><a href="/news" data-nav="news">News</a></nav>' : '<span class="sc">Guestlist</span>';
     else if (org) h += '<nav class="nav"><a href="/" data-nav="events">Events</a><a href="/community" data-nav="community">Community</a><a href="/account" data-nav="account">Page</a></nav>';
-    else if (person) h += '<nav class="nav"><a href="/me" data-nav="me">My invitations</a></nav>';
+    else if (person) h += '<nav class="nav"><a href="/me" data-nav="me">Invitations</a><a href="/news" data-nav="news">News</a></nav>';
     else h += '<nav class="nav"><a href="/login">Log in</a></nav>';
     // The account in use; tap to switch to another one signed in on this device
     var who = org ? org.name : person ? person.name : '';
@@ -228,7 +228,7 @@
     if (!org) return go('/login', true);
     header(); setNav('account');
     var inv = location.origin + '/' + org.handle + '?i=' + org.invite_token;
-    main.innerHTML = '<div class="stack lg"><div class="toolbar"><h1>Your page</h1><a class="btn small line" href="/' + esc(org.handle) + '">View</a></div>' +
+    main.innerHTML = '<div class="stack lg"><div class="toolbar"><h1>Your page</h1><a class="btn small line" href="/' + esc(org.handle) + '">View</a></div>' + newsBox() +
       '<div class="stack"><span class="sc">Logo</span><div class="box" style="align-items:center">' + (org.logo ? logoImg(org.logo) : '<p class="quiet small">No logo yet. A square or wide mark on a transparent background looks best.</p>') +
       '<div class="acts"><label class="btn small line" style="flex-direction:row;cursor:pointer">' + (org.logo ? 'Replace' : 'Upload a logo') + '<input type="file" id="up-logo" accept="image/png,image/jpeg,image/webp" hidden></label>' +
       (org.logo ? '<button class="link small" data-act="rmlogo">Remove</button>' : '') + '</div></div></div>' +
@@ -249,6 +249,7 @@
       '<p class="quiet small">Whoever opens it can see your events and join your community, even when your page is by invitation.</p>' +
       '<div class="acts"><button class="btn small" data-act="copylink" data-id="' + esc(inv) + '">Copy link</button><button class="link small" data-act="newinvite">Make a new link</button></div></div>' +
       '<hr class="rule"><p class="quiet small">' + esc(org.email) + ' · <button class="link small" data-act="logout">Log out</button></p></div>';
+    loadNews();
   }
   // Logos keep their shape and transparency; resized in the browser.
   function prepareLogo(file) {
@@ -507,6 +508,52 @@
     return head + '\n\n' + lines.join('\n') + '\n\n' + c.people + (c.people === 1 ? ' person' : ' people') + ' · ' + c.confirmed + ' confirmed';
   }
 
+  // ---------- news: hosts post on their page; their community reads (and comments, when allowed) ----------
+  function postHtml(p, ctx) {
+    var canComment = p.comments_on && (ctx.host || ctx.member);
+    var h = '<div class="post" data-id="' + p.id + '">';
+    if (ctx.feed && p.host) h += '<a class="post-host" href="/' + esc(p.host.handle) + '"><span class="acct-av">' + (p.host.logo ? '<img src="' + esc(p.host.logo) + '" alt="">' : esc(p.host.name.charAt(0).toUpperCase())) + '</span><b>' + esc(p.host.name) + '</b></a>';
+    h += '<p class="date">' + esc(ago(p.created_at)) + '</p>';
+    if (p.text) h += '<p class="details">' + linkify(p.text) + '</p>';
+    if (p.photo) h += '<a href="' + esc(p.photo) + '" target="_blank" rel="noopener"><img class="upd-photo" src="' + esc(p.photo) + '" alt="" loading="lazy"></a>';
+    if (ctx.host) h += '<div class="acts small"><button class="link small" data-act="postcomments" data-id="' + p.id + '" data-on="' + (p.comments_on ? 1 : 0) + '"><span class="switch' + (p.comments_on ? ' on' : '') + '" style="display:inline-block;vertical-align:middle;margin-right:8px"><i></i></span>Comments ' + (p.comments_on ? 'on' : 'off') + '</button>' +
+      '<button class="link small" data-act="delpost" data-id="' + p.id + '">Delete</button></div>';
+    if (p.comments.length && (p.comments_on || ctx.host)) h += '<div class="comments">' + p.comments.map(function (c) {
+      return '<div class="comment"><p><b>' + esc(c.name) + '</b>' + (c.by_host ? ' <span class="tag">host</span>' : '') + ' <span class="quiet small">' + esc(ago(c.created_at)) + '</span>' +
+        (c.can_delete ? ' <button class="link small" data-act="delcomment" data-id="' + c.id + '">Delete</button>' : '') + '</p><p class="details">' + linkify(c.text) + '</p></div>';
+    }).join('') + '</div>';
+    if (canComment) h += '<form id="f-comment-' + p.id + '" class="f-comment" data-id="' + p.id + '"><input name="text" maxlength="1000" placeholder="Write a comment" autocomplete="off" style="font-size:16px"><button class="btn small line" type="submit">Send</button><p class="err" hidden></p></form>';
+    return h + '</div>';
+  }
+  function postsHtml(list, ctx) { return '<div class="posts">' + list.map(function (p) { return postHtml(p, ctx); }).join('') + '</div>'; }
+  function viewFeed() {
+    if (!person) return go('/login?as=guest', true);
+    header(); setNav('news'); loading();
+    api('GET', '/people/feed').then(function (j) {
+      var h = '<div class="stack lg"><h1>News</h1>';
+      h += j.posts.length ? postsHtml(j.posts, { feed: true, member: true }) : '<p class="quiet">Nothing yet. News from the pages you joined will show here.</p>';
+      main.innerHTML = h + '</div>';
+    }).catch(showError);
+  }
+  function newsBox() {
+    return '<div class="box" id="news-box"><span class="sc">News</span><p class="quiet small">Your community sees your news on your page and in their newsfeed.</p>' +
+      '<form id="f-post"><label><span>New post</span><textarea name="text" maxlength="5000" placeholder="Links work as they are, or write [text](https://…)."></textarea></label>' +
+      '<input type="hidden" name="photo" value=""><div id="post-photo"></div>' +
+      '<div class="acts small"><label class="btn small line" style="flex-direction:row;cursor:pointer">Add a photo<input type="file" id="up-post" accept="image/*" hidden></label></div>' +
+      '<label class="check"><input type="checkbox" name="comments" checked><span>Allow comments</span></label>' +
+      '<p class="err" hidden></p><div class="acts"><button class="btn small" type="submit">Publish</button></div></form><div id="news-list"><p class="quiet small">Loading…</p></div></div>';
+  }
+  // Reload what shows the news, keeping the scroll
+  function refreshNews() {
+    if (document.getElementById('news-list')) return loadNews();
+    var y = window.scrollY; Promise.resolve(route()).then(function () { setTimeout(function () { window.scrollTo(0, y); }, 700); });
+  }
+  function loadNews() {
+    api('GET', '/posts').then(function (j) {
+      var el = document.getElementById('news-list'); if (el) el.innerHTML = j.posts.length ? postsHtml(j.posts, { host: true }) : '';
+    }).catch(function () {});
+  }
+
   // ---------- guests: an organizer's page ----------
   function joinForm(o, mode, inviteToken) {
     // mode: 'post' (keep me posted), 'ask' (ask to join, the host confirms) or 'request' (request an invitation)
@@ -539,6 +586,8 @@
         }).join('') + '</div>';
         else h += '<p class="quiet">No upcoming events yet.</p>';
         h += '</div>';
+        if (j.posts && j.posts.length) h += '<div class="stack"><h3>News</h3>' + postsHtml(j.posts, { host: j.is_owner && !!org, member: !!person && j.my_status === 'member' }) + '</div>';
+        else if (j.has_news && j.my_status !== 'member') h += '<p class="quiet small center">' + esc(o.name) + ' shares news with their community.</p>';
         if (j.my_status === 'member') h += '<div class="card"><p class="sc">Community</p><h2>You\'re in.</h2><p class="quiet small">' + esc(o.name) + '\'s next invitations land in <a href="/me">My invitations</a>.</p></div>' + pushBox({});
         else if (j.my_status === 'requested') h += '<div class="card"><p class="sc">Community</p><h2>Your request is in.</h2><p class="quiet small">' + esc(o.name) + ' confirms who joins. Once you\'re in, their next invitations land in <a href="/me">My invitations</a>.</p></div>';
         else if (!j.is_owner) h += '<div class="stack"><h3>Keep me posted</h3><p class="quiet small">Be the first to hear about ' + esc(o.name) + '\'s next guestlists.' + (o.join === 'approval' && !j.invited ? ' ' + esc(o.name) + ' confirms who joins.' : '') + '</p>' + joinForm(o, o.join === 'approval' && !j.invited ? 'ask' : 'post', i) + '</div>';
@@ -797,6 +846,18 @@
     if (act === 'rmphoto') { setFormPhotos(formPhotos().filter(function (u) { return u !== id; })); return; }
     if (act === 'coverphoto') { var pl = formPhotos().filter(function (u) { return u !== id; }); pl.unshift(id); setFormPhotos(pl); return; }
     if (act === 'accounts') { accountsMenu(); return; }
+    if (act === 'postcomments') {
+      var on = b.getAttribute('data-on') !== '1';
+      api('PATCH', '/posts/' + id, { comments: on }).then(function () { say(on ? 'Comments on.' : 'Comments off.'); refreshNews(); }).catch(function (e) { say(e.message); });
+      return;
+    }
+    if (act === 'delpost') {
+      if (b.getAttribute('data-sure') !== '1') { b.setAttribute('data-sure', '1'); b.textContent = 'Tap again to delete'; return; }
+      api('DELETE', '/posts/' + id).then(function () { say('Deleted.'); refreshNews(); }).catch(function (e) { say(e.message); });
+      return;
+    }
+    if (act === 'delcomment') { api('DELETE', '/comments/' + id).then(function () { say('Comment deleted.'); refreshNews(); }).catch(function (e) { say(e.message); }); return; }
+    if (act === 'rmpostphoto') { var fp = document.getElementById('f-post'); fp.elements.namedItem('photo').value = ''; document.getElementById('post-photo').innerHTML = ''; return; }
     if (act === 'switchacct') {
       api('POST', '/switch', id === 'guest' ? { guest: true } : { handle: id }).then(function (j) {
         org = j.org; person = j.person || person; say('Now using ' + (org ? org.name : person.name) + '.'); go(org ? '/' : '/me', true);
@@ -848,6 +909,17 @@
     if (ev.target.name === 'email' && ev.target.closest('#f-update')) {
       var um = document.getElementById('upd-mail'); if (um) um.hidden = !ev.target.checked;
       var fu0 = document.getElementById('f-update'); fu0.setAttribute('data-confirm', '0'); fu0.querySelector('[type=submit]').textContent = 'Post the update';
+      return;
+    }
+    if (ev.target.id === 'up-post' && ev.target.files.length) {
+      var fpp = document.getElementById('f-post'), sbp = fpp.querySelector('[type=submit]');
+      sbp.disabled = true; say('Uploading the photo…');
+      preparePhoto(ev.target.files[0]).then(function (data) { return api('POST', '/images', { data: data }); }).then(function (r) {
+        fpp.elements.namedItem('photo').value = r.url;
+        document.getElementById('post-photo').innerHTML = '<img class="upd-photo" src="' + esc(r.url) + '" alt=""><div><button type="button" class="link small" data-act="rmpostphoto">Remove the photo</button></div>';
+        sbp.disabled = false;
+      }).catch(function (e) { sbp.disabled = false; say(e.message); });
+      ev.target.value = '';
       return;
     }
     if (ev.target.id === 'up-upd' && ev.target.files.length) {
@@ -919,6 +991,14 @@
       api('POST', '/people/signup', { event: pid, t: tokenFor(pid), password: d.password }).then(function (j) {
         person = j.person; say('Done. Your next invitations will be waiting here.'); viewGuest(pid);
       }).catch(fail);
+    } else if (f.id === 'f-post') {
+      if (!d.text && !d.photo) { fail(new Error('Write something or add a photo.')); return; }
+      api('POST', '/posts', { text: d.text, photo: d.photo, comments: !!d.comments }).then(function () {
+        say('Published.'); f.reset(); f.elements.namedItem('photo').value = ''; document.getElementById('post-photo').innerHTML = ''; btn.disabled = false; loadNews();
+      }).catch(fail);
+    } else if (/^f-comment-/.test(f.id)) {
+      if (!d.text) { btn.disabled = false; return; }
+      api('POST', '/posts/' + f.getAttribute('data-id') + '/comments', { text: d.text }).then(function () { refreshNews(); }).catch(fail);
     } else if (f.id === 'f-forgot') {
       api('POST', '/forgot', d).then(function () {
         main.innerHTML = '<div class="stack lg center"><h1>Check your email</h1><p class="quiet">If an account matches <b>' + esc(d.login) + '</b>, a login link is on its way. It works once, for one hour.</p><p class="small"><a href="/login">Back to log in</a></p></div>';
@@ -964,6 +1044,7 @@
     if (p === '/account') return viewAccount();
     if (p === '/community') return viewCommunity();
     if (p === '/me') return viewMe();
+    if (p === '/news') return viewFeed();
     if (p === '/prefs') return viewPrefs();
     if (p === '/new') return viewNew();
     if ((m = /^\/e\/([a-z0-9]{4,16})$/.exec(p))) return org ? viewManage(m[1]) : (history.replaceState({}, '', '/' + m[1]), viewGuest(m[1]));

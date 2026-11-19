@@ -257,3 +257,22 @@ header{position:relative}
 .update .date{font-family:var(--text);font-size:12px;letter-spacing:.08em;color:var(--muted)}
 .upd-photo{display:block;max-width:100%;max-height:420px;height:auto;border:1px solid var(--line)}
 .details a,.update a{color:var(--ink);text-decoration-color:var(--accent);word-break:break-word}
+
+/* news */
+.posts{display:flex;flex-direction:column}
+.post{display:flex;flex-direction:column;gap:10px;padding:18px 0;border-top:1px solid var(--line)}
+.post:first-child{border-top:0;padding-top:6px}
+.post .date{font-family:var(--text);font-size:12px;letter-spacing:.08em;color:var(--muted)}
+.post-host{display:flex;align-items:center;gap:10px;color:var(--ink);text-decoration:none}
+.post-host b{font:700 17px/1.2 var(--display);letter-spacing:-.02em}
+.post .acts .switch{width:30px;height:18px}
+.post .acts .switch i{width:12px;height:12px}
+.post .acts .switch.on i{left:14px}
+.comments{display:flex;flex-direction:column;gap:10px;padding-left:14px;border-left:1px solid var(--line)}
+.comment p{margin:0}
+.comment b{font:700 14px/1.3 var(--display)}
+.comment .details{font-size:14px}
+.tag{font-family:var(--text);font-size:10px;letter-spacing:.1em;text-transform:uppercase;border:1px solid var(--accent);color:var(--accent);padding:1px 5px;vertical-align:1px}
+form.f-comment{display:flex;flex-direction:row;gap:10px;align-items:flex-end;flex-wrap:wrap}
+.f-comment input{flex:1 1 0;min-width:0;width:auto}
+.f-comment .err{flex-basis:100%}

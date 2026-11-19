@@ -25,7 +25,7 @@ function customOf(o) {
 }
 function themeOf(theme, custom) { return theme === 'custom' && custom ? 'custom' : THEMES.includes(theme) ? theme : DEFAULT_THEME; }
 const RESERVED = new Set(['api', 'e', 'i', 'new', 'login', 'signup', 'logout', 'account', 'community', 'me', 'img', 'app', 'style', 'favicon', 'prefs',
-  'admin', 'settings', 'help', 'about', 'terms', 'privacy', 'www', 'list', 'rsvp', 'events', 'event', 'invite', 'join', 'guest', 'guests', 'forgot', 'reset', 'password']);
+  'admin', 'settings', 'help', 'about', 'terms', 'privacy', 'www', 'list', 'rsvp', 'events', 'event', 'invite', 'join', 'guest', 'guests', 'forgot', 'reset', 'password', 'news', 'feed']);
 const ADMINS = new Set(['astradanza']);
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,29}$/;
 
@@ -136,6 +136,13 @@ async function ensureSchema(env) {
     // Magic links (forgotten password): one use, one hour
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_resets (token TEXT PRIMARY KEY, kind TEXT NOT NULL, account_id INTEGER NOT NULL, email TEXT NOT NULL,
       used INTEGER NOT NULL DEFAULT 0, expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
+    // News hosts post on their page, for their community; comments only when the host allows them. No likes, no counts.
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_posts (id INTEGER PRIMARY KEY AUTOINCREMENT, org_id INTEGER NOT NULL REFERENCES gl_orgs(id) ON DELETE CASCADE,
+      text TEXT NOT NULL DEFAULT '', photo TEXT NOT NULL DEFAULT '', comments INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS gl_posts_org ON gl_posts(org_id, id)'),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_comments (id INTEGER PRIMARY KEY AUTOINCREMENT, post_id INTEGER NOT NULL REFERENCES gl_posts(id) ON DELETE CASCADE,
+      person_id INTEGER, org_id INTEGER, name TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS gl_comments_post ON gl_comments(post_id, id)'),
     // Updates organizers post on an event page (optionally emailed to the guests)
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_updates (id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL REFERENCES gl_events(id) ON DELETE CASCADE,
       text TEXT NOT NULL DEFAULT '', photo TEXT NOT NULL DEFAULT '', guests_only INTEGER NOT NULL DEFAULT 0, emailed INTEGER NOT NULL DEFAULT 0,
@@ -336,6 +343,21 @@ async function upsertContact(env, orgId, { email, name, status, consent, source,
   await env.DB.prepare(`UPDATE gl_contacts SET name = COALESCE(NULLIF(?, ''), name), status = ?, consent = ?, note = CASE WHEN ? != '' THEN ? ELSE note END, updated_at = datetime('now') WHERE id = ?`)
     .bind(name || '', next, consent === undefined ? prev.consent : consent ? 1 : 0, note || '', note || '', prev.id).run();
   return next;
+}
+// News: posts with their comments, for one viewer (a person, or the host)
+async function postsWith(env, posts, { person, org }) {
+  if (!posts.length) return [];
+  const ids = posts.map((p) => p.id);
+  const cs = (await env.DB.prepare(`SELECT * FROM gl_comments WHERE post_id IN (${ids.map(() => '?').join(',')}) ORDER BY id`).bind(...ids).all()).results;
+  return posts.map((p) => ({
+    id: p.id, text: p.text, photo: p.photo || '', comments_on: !!p.comments, created_at: p.created_at,
+    host: p.org_handle ? { name: p.org_name, handle: p.org_handle, logo: p.org_logo || '' } : undefined,
+    is_host: !!org && org.id === p.org_id,
+    comments: cs.filter((c) => c.post_id === p.id).map((c) => ({
+      id: c.id, name: c.name, text: c.text, created_at: c.created_at, by_host: !!c.org_id,
+      can_delete: (!!org && (org.id === p.org_id || org.id === c.org_id)) || (!!person && person.id === c.person_id)
+    }))
+  }));
 }
 async function memberOf(env, orgId, email) {
   if (!email) return null;
@@ -813,6 +835,72 @@ async function api(request, env, url, ctx) {
     if (t) await env.DB.prepare('DELETE FROM gl_psessions WHERE token = ?').bind(t).run();
     return json({ ok: true }, 200, { 'set-cookie': makeCookie('psid', '', url, 0) });
   }
+  // --- news ---
+  if (path === '/api/posts' && method === 'GET') {
+    if (!org) fail(401, 'Log in first.');
+    const posts = (await env.DB.prepare('SELECT * FROM gl_posts WHERE org_id = ? ORDER BY id DESC LIMIT 100').bind(org.id).all()).results;
+    return json({ posts: await postsWith(env, posts, { person, org }) });
+  }
+  if (path === '/api/posts' && method === 'POST') {
+    if (!org) fail(401, 'Log in first.');
+    const b = await body(request);
+    const text = (typeof b.text === 'string' ? b.text : '').replace(/\r\n/g, '\n').trim().slice(0, 5000);
+    const photo = b.photo ? (await ownPhotos(env, org, [b.photo]))[0] || '' : '';
+    if (!text && !photo) fail(400, 'Write something or add a photo.');
+    const p = await env.DB.prepare('INSERT INTO gl_posts (org_id, text, photo, comments) VALUES (?, ?, ?, ?) RETURNING *').bind(org.id, text, photo, b.comments === false ? 0 : 1).first();
+    return json({ post: (await postsWith(env, [p], { person, org }))[0] });
+  }
+  if (seg[0] === 'posts' && seg[1] && !seg[2]) {
+    if (!org) fail(401, 'Log in first.');
+    const p = await env.DB.prepare('SELECT * FROM gl_posts WHERE id = ? AND org_id = ?').bind(Number(seg[1]), org.id).first();
+    if (!p) fail(404, 'That post is gone.');
+    if (method === 'PATCH') {
+      const b = await body(request);
+      await env.DB.prepare('UPDATE gl_posts SET comments = ? WHERE id = ?').bind(b.comments ? 1 : 0, p.id).run();
+      return json({ ok: true, comments_on: !!b.comments });
+    }
+    if (method === 'DELETE') {
+      await env.DB.prepare('DELETE FROM gl_comments WHERE post_id = ?').bind(p.id).run();
+      await env.DB.prepare('DELETE FROM gl_posts WHERE id = ?').bind(p.id).run();
+      if (p.photo) await dropPhotos(env, org, [p.photo]);
+      return json({ ok: true });
+    }
+  }
+  // Comments: members of the host's community (logged in), and the host
+  if (seg[0] === 'posts' && seg[1] && seg[2] === 'comments' && method === 'POST') {
+    const p = await env.DB.prepare('SELECT * FROM gl_posts WHERE id = ?').bind(Number(seg[1])).first();
+    if (!p) fail(404, 'That post is gone.');
+    const b = await body(request);
+    const text = (typeof b.text === 'string' ? b.text : '').replace(/\r\n/g, '\n').trim().slice(0, 1000);
+    if (!text) fail(400, 'Write a comment.');
+    let row;
+    if (org && org.id === p.org_id) {
+      row = await env.DB.prepare('INSERT INTO gl_comments (post_id, org_id, name, text) VALUES (?, ?, ?, ?) RETURNING *').bind(p.id, org.id, org.name, text).first();
+    } else {
+      if (!person) fail(401, 'Log in to comment.');
+      if (!p.comments) fail(403, 'Comments are off for this post.');
+      if ((await memberOf(env, p.org_id, person.email)) !== 'member') fail(403, 'Join this page to comment.');
+      const { n } = await env.DB.prepare(`SELECT COUNT(*) AS n FROM gl_comments WHERE person_id = ? AND created_at > datetime('now', '-1 minute')`).bind(person.id).first();
+      if (n >= 5) fail(429, 'Slow down a little. Try again in a minute.');
+      row = await env.DB.prepare('INSERT INTO gl_comments (post_id, person_id, name, text) VALUES (?, ?, ?, ?) RETURNING *').bind(p.id, person.id, person.name, text).first();
+    }
+    return json({ comment: { id: row.id, name: row.name, text: row.text, created_at: row.created_at, by_host: !!row.org_id, can_delete: true } });
+  }
+  if (seg[0] === 'comments' && seg[1] && method === 'DELETE') {
+    const c = await env.DB.prepare('SELECT c.*, p.org_id AS post_org FROM gl_comments c JOIN gl_posts p ON p.id = c.post_id WHERE c.id = ?').bind(Number(seg[1])).first();
+    if (!c) fail(404, 'That comment is gone.');
+    const ok = (org && (org.id === c.post_org || org.id === c.org_id)) || (person && person.id === c.person_id);
+    if (!ok) fail(403, 'You cannot delete this comment.');
+    await env.DB.prepare('DELETE FROM gl_comments WHERE id = ?').bind(c.id).run();
+    return json({ ok: true });
+  }
+  // The newsfeed: news from every page the guest is a member of
+  if (path === '/api/people/feed' && method === 'GET') {
+    if (!person) fail(401, 'Log in first.');
+    const posts = (await env.DB.prepare(`SELECT p.*, o.name AS org_name, o.handle AS org_handle, o.logo AS org_logo FROM gl_posts p JOIN gl_orgs o ON o.id = p.org_id
+      WHERE p.org_id IN (SELECT org_id FROM gl_contacts WHERE email = ? AND status = 'member') ORDER BY p.id DESC LIMIT 60`).bind(person.email).all()).results;
+    return json({ posts: await postsWith(env, posts, { person, org: null }) });
+  }
   if (path === '/api/people/me' && method === 'GET') {
     if (!person) fail(401, 'Log in first.');
     // Upcoming events of the pages they belong to, and their own RSVPs
@@ -844,7 +932,9 @@ async function api(request, env, url, ctx) {
       const isOwner = !!org && org.id === o.id;
       const access = o.visibility === 'public' || inviteOk || isOwner || mine === 'member';
       const events = access ? (await env.DB.prepare(`SELECT * FROM gl_events e WHERE e.org_id = ? AND (e.listed = 1 OR ${isOwner ? 1 : 0}) AND ${UPCOMING} ORDER BY CASE WHEN e.starts_at = '' THEN 1 ELSE 0 END, e.starts_at`).bind(o.id).all()).results.map(eventShape) : [];
-      return json({ org: publicOrg(o), access, invited: inviteOk, is_owner: isOwner, my_status: mine, events });
+      const insider = isOwner || mine === 'member';
+      const posts = insider ? await postsWith(env, (await env.DB.prepare('SELECT * FROM gl_posts WHERE org_id = ? ORDER BY id DESC LIMIT 30').bind(o.id).all()).results, { person, org }) : [];
+      return json({ org: publicOrg(o), access, invited: inviteOk, is_owner: isOwner, my_status: mine, events, posts, has_news: !insider && !!(await env.DB.prepare('SELECT 1 FROM gl_posts WHERE org_id = ? LIMIT 1').bind(o.id).first()) });
     }
     // Keep me posted (public page or invitation link) / Request an invitation (private page)
     if (seg[2] === 'join' && method === 'POST') {
