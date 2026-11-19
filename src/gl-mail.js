@@ -23,22 +23,21 @@ function when(e) {
 }
 const where = (e) => [e.venue, e.city].filter(Boolean).join(', ');
 
-// One sober layout: cream paper, ink, serif. Works in Gmail, Apple Mail and Outlook.
+// One plain layout: white, system type, close to a hand-written email. Works in Gmail, Apple Mail and Outlook.
+const FONT = "-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif";
 function layout({ kicker, title, lines = [], button, after = [], footer }) {
-  const p = (t, style = '') => `<p style="margin:0 0 12px;font:16px/1.55 Georgia,'Times New Roman',serif;color:#1C1B19;${style}">${t}</p>`;
-  return `<!doctype html><html><body style="margin:0;padding:0;background:#F2EDE3">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F2EDE3"><tr><td align="center" style="padding:32px 16px">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px">
-<tr><td style="padding:0 0 18px;border-bottom:1px solid #D8D0C1;font:italic 22px Georgia,serif;color:#1C1B19">rsvp<span style="font-style:italic">.fm</span></td></tr>
-<tr><td style="padding:28px 0 8px">
-${kicker ? `<p style="margin:0 0 10px;font:12px/1.4 Georgia,serif;letter-spacing:2px;text-transform:uppercase;color:#6E685E">${kicker}</p>` : ''}
-<h1 style="margin:0 0 18px;font:400 30px/1.15 Georgia,'Times New Roman',serif;color:#1C1B19">${title}</h1>
+  const p = (t, style = '') => `<p style="margin:0 0 14px;font:15px/1.6 ${FONT};color:#111111;${style}">${t}</p>`;
+  return `<!doctype html><html><head><meta name="color-scheme" content="light"><meta name="supported-color-schemes" content="light"></head><body style="margin:0;padding:0;background:#ffffff">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff"><tr><td style="padding:28px 20px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px">
+<tr><td>
+${kicker ? `<p style="margin:0 0 6px;font:13px/1.4 ${FONT};color:#8a8a8a">${kicker}</p>` : ''}
+<p style="margin:0 0 18px;font:600 19px/1.35 ${FONT};color:#111111">${title}</p>
 ${lines.map((l) => p(l)).join('\n')}
-${button ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:22px 0 8px"><tr><td style="background:#1C1B19"><a href="${esc(button.href)}" style="display:inline-block;padding:14px 26px;font:14px Georgia,serif;letter-spacing:2px;text-transform:uppercase;color:#F2EDE3;text-decoration:none">${esc(button.label)}</a></td></tr></table>` : ''}
-${after.map((l) => p(l, 'color:#6E685E;font-size:14px')).join('\n')}
-</td></tr>
-<tr><td style="padding:22px 0 0;border-top:1px solid #D8D0C1;font:13px/1.5 Georgia,serif;color:#9C9588">${footer || 'Sent by rsvp.fm on behalf of the organizer.'}</td></tr>
-</table></td></tr></table></body></html>`;
+${button ? `<p style="margin:22px 0 22px"><a href="${esc(button.href)}" style="display:inline-block;padding:10px 18px;background:#111111;border-radius:6px;font:600 14px/1 ${FONT};color:#ffffff;text-decoration:none">${esc(button.label)}</a></p>` : ''}
+${after.map((l) => p(l, 'color:#6b6b6b;font-size:14px')).join('\n')}
+<p style="margin:26px 0 0;padding-top:14px;border-top:1px solid #eeeeee;font:12px/1.5 ${FONT};color:#9a9a9a">${footer || 'Sent by rsvp.fm on behalf of the organizer.'}</p>
+</td></tr></table></td></tr></table></body></html>`;
 }
 const textOf = ({ title, lines = [], button, after = [], footer }) =>
   [title, '', ...lines.map((l) => l.replace(/<[^>]+>/g, '')), button ? `${button.label}: ${button.href}` : '', '', ...after.map((l) => l.replace(/<[^>]+>/g, '')), '', (footer || '').replace(/<[^>]+>/g, '')].join('\n').replace(/\n{3,}/g, '\n\n').trim();
@@ -183,7 +182,7 @@ export async function sendDigests(env, { limit = 2000, now = new Date() } = {}) 
     if (sent >= limit) break;
     const p = await prefsFor(env, email);
     const orgs = [...new Set([...d.fresh, ...d.waiting].map((r) => r.org_name))];
-    const item = (r) => `<a href="${esc(appUrl(env) + evPath(r.org_handle, r))}" style="color:#1C1B19"><strong>${esc(r.title)}</strong></a><br><span style="color:#6E685E">${esc(r.org_name)} · ${esc(when(r))}${where(r) ? ' · ' + esc(where(r)) : ''}</span>`;
+    const item = (r) => `<a href="${esc(appUrl(env) + evPath(r.org_handle, r))}" style="color:#111111"><strong>${esc(r.title)}</strong></a><br><span style="color:#6b6b6b">${esc(r.org_name)} · ${esc(when(r))}${where(r) ? ' · ' + esc(where(r)) : ''}</span>`;
     const n = d.fresh.length + d.waiting.length;
     const lines = [];
     if (d.fresh.length) lines.push(...d.fresh.map(item));
