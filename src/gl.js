@@ -917,9 +917,21 @@ async function api(request, env, url, ctx) {
     const pages = (await env.DB.prepare(
       `SELECT o.*, c.status AS my_status FROM gl_contacts c JOIN gl_orgs o ON o.id = c.org_id WHERE c.email = ? AND c.status != 'declined' ORDER BY o.name`
     ).bind(person.email).all()).results;
+    // News from their pages, and the public listing: upcoming public events of public pages they are not already invited to
+    const posts = (await env.DB.prepare(`SELECT p.*, o.name AS org_name, o.handle AS org_handle, o.logo AS org_logo FROM gl_posts p JOIN gl_orgs o ON o.id = p.org_id
+      WHERE p.org_id IN (SELECT org_id FROM gl_contacts WHERE email = ? AND status = 'member') ORDER BY p.id DESC LIMIT 30`).bind(person.email).all()).results;
+    const seen = events.map((e) => e.id);
+    const listing = (await env.DB.prepare(
+      `SELECT e.*, o.name AS org_name, o.handle AS org_handle, o.logo AS org_logo FROM gl_events e JOIN gl_orgs o ON o.id = e.org_id
+       WHERE ${UPCOMING} AND e.listed = 1 AND e.open = 1 AND o.visibility = 'public' ${seen.length ? `AND e.id NOT IN (${seen.map(() => '?').join(',')})` : ''}
+       ORDER BY CASE WHEN e.starts_at = '' THEN 1 ELSE 0 END, e.starts_at LIMIT 40`
+    ).bind(...seen).all()).results;
+    const hostOf = (e) => ({ name: e.org_name, handle: e.org_handle, logo: e.org_logo || '' });
     return json({
       person: personShape(person),
-      events: events.map((e) => ({ ...eventShape(e), auto_confirm: undefined, host: { name: e.org_name, handle: e.org_handle, logo: e.org_logo || '' }, my_status: e.my_status || '', my_plus: e.my_plus || 0 })),
+      events: events.map((e) => ({ ...eventShape(e), auto_confirm: undefined, host: hostOf(e), my_status: e.my_status || '', my_plus: e.my_plus || 0 })),
+      posts: await postsWith(env, posts, { person, org: null }),
+      listing: listing.map((e) => ({ ...eventShape(e), auto_confirm: undefined, host: hostOf(e) })),
       pages: pages.map((o) => ({ ...publicOrg(o), my_status: o.my_status }))
     });
   }

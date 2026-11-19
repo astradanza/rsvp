@@ -280,3 +280,12 @@ form.f-comment{display:flex;flex-direction:row;gap:10px;align-items:flex-end;fle
 /* invite friends */
 .copyfield{display:flex;gap:8px;align-items:stretch}
 .copyfield input{flex:1 1 0;min-width:0;width:auto;font-family:var(--text)}
+
+/* public listing, as a feed */
+.lfeed{display:flex;flex-direction:column}
+.lcard{display:flex;flex-direction:column;gap:8px;padding:18px 0;border-top:1px solid var(--line);color:var(--ink);text-decoration:none}
+.lcard:first-child{border-top:0;padding-top:6px}
+.lcard>img{width:100%;height:auto;display:block}
+.lcard .date{font-family:var(--text);font-size:12px;letter-spacing:.08em;color:var(--muted)}
+.lcard .t{font:700 22px/1.15 var(--display);letter-spacing:-.03em}
+.lcard .m{font-family:var(--text);font-size:13px;color:var(--muted)}

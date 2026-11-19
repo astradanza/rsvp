@@ -131,9 +131,9 @@
   // Back office pages use the house look; guest-facing pages wear the organizer's theme.
   function header(kind) {
     var h = '<a class="wordmark" href="/">rsvp<em>.fm</em></a>';
-    if (kind === 'guest') h += person ? '<nav class="nav"><a href="/me" data-nav="me">Invitations</a><a href="/news" data-nav="news">News</a></nav>' : '<span class="sc">Guestlist</span>';
+    if (kind === 'guest') h += person ? '<nav class="nav"><a href="/me" data-nav="me">Feed</a></nav>' : '<span class="sc">Guestlist</span>';
     else if (org) h += '<nav class="nav"><a href="/" data-nav="events">Events</a><a href="/community" data-nav="community">Community</a><a href="/account" data-nav="account">Page</a></nav>';
-    else if (person) h += '<nav class="nav"><a href="/me" data-nav="me">Invitations</a><a href="/news" data-nav="news">News</a></nav>';
+    else if (person) h += '<nav class="nav"><a href="/me" data-nav="me">Feed</a></nav>';
     else h += '<nav class="nav"><a href="/login">Log in</a></nav>';
     // The account in use; tap to switch to another one signed in on this device
     var who = org ? org.name : person ? person.name : '';
@@ -331,7 +331,10 @@
       ['No one', 'A +1', 'Up to +2', 'Up to +3'].map(function (t, i) { return '<option value="' + i + '"' + (pm === i ? ' selected' : '') + '>' + t + '</option>'; }).join('') + '</select></label>' +
       '<label class="check"><input type="checkbox" name="auto_confirm"' + (v.auto_confirm ? ' checked' : '') + '><span>Confirm requests automatically<small>Otherwise every RSVP waits for your confirmation.</small></span></label>' +
       '<label class="check"><input type="checkbox" name="open"' + (v.open === false ? '' : ' checked') + '><span>Guestlist open<small>Close it when you are full: the page stays, the form goes.</small></span></label>' +
-      '<label class="check"><input type="checkbox" name="listed"' + (v.listed === false ? '' : ' checked') + '><span>Show on my page<small>Otherwise only people with the link see it.</small></span></label>' +
+      '<div class="stack" style="gap:8px"><span class="sc" style="font-size:13px">Who can find it</span><div class="seg">' +
+      '<label><input type="radio" name="listed" value="1"' + (v.listed === false ? '' : ' checked') + '><span>Public</span></label>' +
+      '<label><input type="radio" name="listed" value="0"' + (v.listed === false ? ' checked' : '') + '><span>Link only</span></label></div>' +
+      '<p class="quiet small">Public: on your page and in the rsvp.fm feed. Link only: no one finds it unless you send them the link.</p></div>' +
       '<label class="check"><input type="checkbox" name="guest_invites"' + (v.guest_invites === false ? '' : ' checked') + '><span>Guests can invite friends<small>Guests get a link to share. You see who brought whom; their friends RSVP like everyone else.</small></span></label>' +
       '<p class="err" id="err" hidden></p><div class="acts"><button class="btn" type="submit">' + (id ? 'Save' : 'Create the guestlist') + '</button>' +
       (id ? '<a class="link" href="/e/' + esc(id) + '">Cancel</a>' : '') + '</div></form>';
@@ -769,19 +772,32 @@
   }
 
   // ---------- guests: my invitations ----------
+  // The guest's feed: pending invitations, then the guestlists they are on, then news from their pages, then the public listing
+  function inviteItem(e) {
+    var st = e.my_status === 'confirmed' ? 'On the list' + plusLabel(e.my_plus) : e.my_status === 'requested' ? 'Requested' + plusLabel(e.my_plus) : 'Invitation';
+    return '<a class="item" href="' + esc(eventPath(e, e.host.handle)) + '"><span class="date">' + esc(shortDate(e.starts_at)) + '</span><span class="main"><span class="t">' + esc(e.title) + '</span>' +
+      '<span class="m">' + esc(e.host.name) + ' · ' + esc(st) + '</span></span></a>';
+  }
+  function listingCard(e) {
+    var where = [e.venue, e.city].filter(Boolean).join(', ');
+    return '<a class="lcard" href="' + esc(eventPath(e, e.host.handle)) + '">' + (e.photos && e.photos[0] ? '<img src="' + esc(e.photos[0]) + '" alt="" loading="lazy">' : '') +
+      '<span class="post-host"><span class="acct-av">' + (e.host.logo ? '<img src="' + esc(e.host.logo) + '" alt="">' : esc(e.host.name.charAt(0).toUpperCase())) + '</span><b>' + esc(e.host.name) + '</b></span>' +
+      '<span class="date">' + esc(parse(e.starts_at) ? longDate(e.starts_at) : 'Date to come') + '</span><span class="t">' + esc(e.title) + '</span>' + (where ? '<span class="m">' + esc(where) + '</span>' : '') + '</a>';
+  }
   function viewMe() {
     if (!person) return go('/login?as=guest', true);
     header(); setNav('me'); loading();
     api('GET', '/people/me').then(function (j) {
-      var h = '<div class="stack lg"><div class="stack"><p class="sc">' + esc(j.person.name) + '</p><h1>My invitations</h1></div>';
-      if (j.events.length) h += '<div class="list">' + j.events.map(function (e) {
-        var st = e.my_status === 'confirmed' ? 'On the list' + plusLabel(e.my_plus) : e.my_status === 'requested' ? 'Requested' + plusLabel(e.my_plus) : e.my_status === 'declined' ? 'Not this time' : 'Invitation';
-        return '<a class="item" href="' + esc(eventPath(e, e.host.handle)) + '"><span class="date">' + esc(shortDate(e.starts_at)) + '</span><span class="main"><span class="t">' + esc(e.title) + '</span>' +
-          '<span class="m">' + esc(e.host.name) + ' · ' + esc(st) + '</span></span></a>';
-      }).join('') + '</div>';
-      else h += '<p class="quiet">No invitations right now. They will appear here as soon as the pages you follow open a guestlist.</p>';
-      if (j.pages.length) h += '<div class="stack"><h3>Pages</h3><div class="list">' + j.pages.map(function (o) {
-        return '<a class="item" href="/' + esc(o.handle) + '"><span class="main"><span class="t">' + esc(o.name) + '</span><span class="m">' + (o.my_status === 'requested' ? 'Invitation requested' : '') + '</span></span></a>';
+      var pending = j.events.filter(function (e) { return e.my_status === '' || e.my_status === 'requested'; });
+      var onList = j.events.filter(function (e) { return e.my_status === 'confirmed'; });
+      var h = '<div class="stack lg"><div class="stack"><p class="sc">' + esc(j.person.name) + '</p><h1>Feed</h1></div>';
+      if (pending.length) h += '<div class="stack"><h3>Pending</h3><div class="list">' + pending.map(inviteItem).join('') + '</div></div>';
+      if (onList.length) h += '<div class="stack"><h3>On the list</h3><div class="list">' + onList.map(inviteItem).join('') + '</div></div>';
+      if (!pending.length && !onList.length) h += '<p class="quiet">No invitations right now. They show up here as soon as the pages you follow open a guestlist.</p>';
+      if (j.posts && j.posts.length) h += '<div class="stack"><h3>News</h3>' + postsHtml(j.posts, { feed: true, member: true }) + '</div>';
+      if (j.listing && j.listing.length) h += '<div class="stack"><h3>Happening</h3><div class="lfeed">' + j.listing.map(listingCard).join('') + '</div></div>';
+      if (j.pages.length) h += '<div class="stack"><h3>Pages you follow</h3><div class="list">' + j.pages.map(function (o) {
+        return '<a class="item" href="/' + esc(o.handle) + '"><span class="main"><span class="t">' + esc(o.name) + '</span><span class="m">' + (o.my_status === 'requested' ? 'Request sent' : '') + '</span></span></a>';
       }).join('') + '</div></div>';
       h += pushBox({});
       h += '<div id="prefs-slot"></div>';
@@ -1063,7 +1079,7 @@
     if (p === '/account') return viewAccount();
     if (p === '/community') return viewCommunity();
     if (p === '/me') return viewMe();
-    if (p === '/news') return viewFeed();
+    if (p === '/news') return go('/me', true);
     if (p === '/prefs') return viewPrefs();
     if (p === '/new') return viewNew();
     if ((m = /^\/e\/([a-z0-9]{4,16})$/.exec(p))) return org ? viewManage(m[1]) : (history.replaceState({}, '', '/' + m[1]), viewGuest(m[1]));
