@@ -26,6 +26,7 @@ function customOf(o) {
 function themeOf(theme, custom) { return theme === 'custom' && custom ? 'custom' : THEMES.includes(theme) ? theme : DEFAULT_THEME; }
 const RESERVED = new Set(['api', 'e', 'i', 'new', 'login', 'signup', 'logout', 'account', 'community', 'me', 'img', 'app', 'style', 'favicon', 'prefs',
   'admin', 'settings', 'help', 'about', 'terms', 'privacy', 'www', 'list', 'rsvp', 'events', 'event', 'invite', 'join', 'guest', 'guests', 'forgot', 'reset', 'password']);
+const ADMINS = new Set(['astradanza']);
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,29}$/;
 
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
@@ -481,6 +482,21 @@ async function api(request, env, url, ctx) {
     return json({ ok: true }, 200, { 'set-cookie': [makeCookie('gsid', '', url, 0), tokensCookie(orgTokens(request).filter((x) => x !== t), url)] });
   }
   // Every account signed in on this device: organizer accounts, and the guest profile
+  // Admin: every host account as CSV (only for the rsvp.fm team's own account)
+  if (path === '/api/admin/hosts.csv' && method === 'GET') {
+    if (!org || !ADMINS.has(org.handle)) fail(404, 'Not found.');
+    const rows = (await env.DB.prepare(`SELECT o.id, o.name, o.handle, o.email, o.visibility, o.created_at,
+      (SELECT COUNT(*) FROM gl_events e WHERE e.org_id = o.id) AS events,
+      (SELECT COUNT(*) FROM gl_guests g JOIN gl_events e ON e.id = g.event_id WHERE e.org_id = o.id) AS rsvps,
+      (SELECT COALESCE(SUM(1 + g.plus), 0) FROM gl_guests g JOIN gl_events e ON e.id = g.event_id WHERE e.org_id = o.id AND g.status = 'confirmed') AS people_confirmed,
+      (SELECT COUNT(*) FROM gl_contacts c WHERE c.org_id = o.id AND c.status = 'member') AS community,
+      (SELECT MAX(e.starts_at) FROM gl_events e WHERE e.org_id = o.id) AS last_event
+      FROM gl_orgs o ORDER BY o.created_at`).all()).results;
+    const cols = ['id', 'name', 'handle', 'email', 'visibility', 'created_at', 'events', 'rsvps', 'people_confirmed', 'community', 'last_event'];
+    const cell = (v) => { const t = v == null ? '' : String(v); return /[",\n;]/.test(t) || /^[=+\-@]/.test(t) ? '"' + (/^[=+\-@]/.test(t) ? "'" : '') + t.replace(/"/g, '""') + '"' : t; };
+    const csv = '\ufeff' + [cols.join(','), ...rows.map((r) => cols.map((c) => cell(r[c])).join(','))].join('\r\n') + '\r\n';
+    return new Response(csv, { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="rsvp-fm-hosts-${new Date().toISOString().slice(0, 10)}.csv"`, 'cache-control': 'no-store' } });
+  }
   if (path === '/api/accounts' && method === 'GET') {
     const list = orgTokens(request);
     const rows = list.length ? (await env.DB.prepare(`SELECT s.token, o.id, o.name, o.handle, o.logo FROM gl_sessions s JOIN gl_orgs o ON o.id = s.org_id
