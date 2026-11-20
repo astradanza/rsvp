@@ -339,3 +339,13 @@ label.tix-special{flex-direction:row;gap:0}
 body[data-theme] label.tix-special>span.ts-main,body[data-theme] label.tix-special>span.ts-stub{font:inherit;letter-spacing:0;text-transform:none;color:#000}
 .tix-special .ts-note{font-family:var(--display);font-weight:400;text-transform:none;letter-spacing:0}
 .tix-special b{text-transform:none}
+/* buying: what's not chosen is greyed, a − / + for how many, the total in big */
+.tix-opt:has(input:not(:checked)){opacity:.45}
+.qty{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.stepper{display:flex;align-items:center;border:1px solid var(--line)}
+.stepper .step{width:46px;height:46px;background:none;border:0;color:var(--ink);font:400 24px/1 var(--display);cursor:pointer}
+.stepper .step:disabled{color:var(--faint);cursor:default}
+.stepper input{width:48px;height:46px;text-align:center;border:0;border-left:1px solid var(--line);border-right:1px solid var(--line);background:none;color:var(--ink);font:700 20px/1 var(--display);padding:0}
+.buy-total{display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 0 2px;border-top:1px solid var(--line)}
+.bt-calc{font-family:var(--text);font-size:12px;letter-spacing:.06em;color:var(--muted);text-align:center}
+.bt-sum{font:700 40px/1.05 var(--display);letter-spacing:-.03em;color:var(--ink)}

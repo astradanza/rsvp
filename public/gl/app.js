@@ -270,9 +270,11 @@
       return '<label class="check tix-opt' + (off ? ' off' : '') + '"><input type="radio" name="type_id" value="' + t.id + '"' + (off ? ' disabled' : t === on[0] ? ' checked' : '') + '>' +
         '<span><b>' + esc(t.name) + '</b> · ' + esc(t.label) + (note ? '<small>' + note + '</small>' : '') + '</span></label>';
     }).join('') +
-      '<label><span>How many</span><select name="qty">' + [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(function (n) { return '<option>' + n + '</option>'; }).join('') + '</select></label>' +
+      '<div class="qty"><span class="sc">How many</span><div class="stepper"><button type="button" class="step" data-act="qtystep" data-id="-1" aria-label="One less">&minus;</button>' +
+      '<input name="qty" value="1" inputmode="numeric" readonly aria-label="Number of tickets"><button type="button" class="step" data-act="qtystep" data-id="1" aria-label="One more">+</button></div></div>' +
       '<label><span>Full name</span><input name="name" required autocomplete="name" value="' + esc(person ? person.name : '') + '"></label>' +
       '<label><span>Email</span><input name="email" type="email" required autocomplete="email" value="' + esc(person ? person.email : '') + '"><small class="quiet">Your QR codes are sent there.</small></label>' +
+      '<div class="buy-total"><span class="bt-calc" id="bt-calc"></span><span class="bt-sum" id="bt-sum"></span></div>' +
       '<p class="err" hidden></p><button class="btn wide" type="submit">Pay · Apple Pay or card</button>' +
       '<p class="quiet small center">Secure payment by Stripe. One QR code per ticket.</p></form></div>';
     return h;
@@ -291,6 +293,20 @@
     if (reload && !tickCountdowns.reloaded) { tickCountdowns.reloaded = true; tickCountdowns.t = setTimeout(route, 2500); return; }
     if (reload) return;
     tickCountdowns.t = setTimeout(tickCountdowns, 1000);
+  }
+  // The quantity (− / +) and the total before paying: tickets × price, in big
+  function fmtMoney(cents, cur) {
+    try { return new Intl.NumberFormat('en', { style: 'currency', currency: String(cur).toUpperCase(), minimumFractionDigits: cents % 100 ? 2 : 0 }).format(cents / 100); } catch (x) { return (cents / 100) + ' ' + String(cur).toUpperCase(); }
+  }
+  function buyTotal(e) {
+    var f = document.getElementById('f-buy'); if (!f || !e) return;
+    var sel = f.querySelector('input[name=type_id]:checked'), q = f.elements.namedItem('qty');
+    var t = sel && e.tickets.filter(function (x) { return String(x.id) === sel.value; })[0];
+    var max = Math.min(10, t && t.left !== null && t.left > 0 ? t.left : 10), n = Math.max(1, Math.min(max, parseInt(q.value, 10) || 1));
+    q.value = n;
+    f.querySelectorAll('.step').forEach(function (b) { b.disabled = b.getAttribute('data-id') === '-1' ? n <= 1 : n >= max; });
+    document.getElementById('bt-calc').textContent = t ? n + ' × ' + t.name + ' · ' + fmtMoney(t.price, t.currency) : '';
+    document.getElementById('bt-sum').textContent = t ? fmtMoney(t.price * n, t.currency) : '';
   }
   function viewTickets(tk) {
     header('guest'); loading();
@@ -554,7 +570,7 @@
   }
 
   // Back office: who RSVP'd, confirm, sort, copy, export.
-  var current = null;
+  var current = null, buyEv = null;
   function viewManage(id) {
     if (!org) return go('/login?next=' + encodeURIComponent('/e/' + id), true);
     header(); setNav('events'); loading();
@@ -803,7 +819,7 @@
       if (e.details) h += '<p class="details">' + linkify(e.details) + '</p>';
       if (ph.length > 1) h += '<div class="gallery">' + ph.slice(1).map(function (u) { return '<a href="' + esc(u) + '" target="_blank" rel="noopener"><img src="' + esc(u) + '" alt="" loading="lazy"></a>'; }).join('') + '</div>';
       if (e.details || ph.length > 1) h += '<hr class="rule">';
-      if (e.tickets && e.tickets.length) { h += buyBox(e); setTimeout(tickCountdowns, 0); }
+      if (e.tickets && e.tickets.length) { h += buyBox(e); setTimeout(tickCountdowns, 0); setTimeout(function () { buyTotal(e); }, 0); buyEv = e; }
       if (j.invite && !j.invite.mine && j.invite.used) h += '<div class="card"><p class="sc">Invitation</p><h2>This link has already been used.</h2><p class="quiet small">Ask ' + esc(host.name) + ' for a new one.</p></div>';
       else if (j.invite && !(j.mine && j.mine.invite_code === j.invite.code)) h += inviteForm(e, j.invite, person || j.mine || {});
       else if (j.mine) h += statusCard(e, j.mine, id) + inviteFriends(e, j.mine) + afterRsvp(e, j.mine, id);
@@ -1055,6 +1071,7 @@
     if (act === 'rmphoto') { setFormPhotos(formPhotos().filter(function (u) { return u !== id; })); return; }
     if (act === 'coverphoto') { var pl = formPhotos().filter(function (u) { return u !== id; }); pl.unshift(id); setFormPhotos(pl); return; }
     if (act === 'accounts') { accountsMenu(); return; }
+    if (act === 'qtystep') { var qf = document.getElementById('f-buy'), qi = qf.elements.namedItem('qty'); qi.value = (parseInt(qi.value, 10) || 1) + parseInt(id, 10); buyTotal(buyEv); return; }
     if (act === 'tixreleases') { api('PATCH', '/events/' + current.event.id + '/tickets/releases', { on: b.checked }).then(loadTix).catch(function (e) { say(e.message); }); return; }
     if (act === 'tixactive') { api('PATCH', '/events/' + current.event.id + '/tickets/' + id, { active: b.getAttribute('data-on') !== '1' }).then(loadTix).catch(function (e) { say(e.message); }); return; }
     if (act === 'tixdel') { api('DELETE', '/events/' + current.event.id + '/tickets/' + id).then(loadTix).catch(function (e) { say(e.message); }); return; }
@@ -1118,6 +1135,7 @@
     }
   });
   document.addEventListener('change', function (ev) {
+    if (ev.target.name === 'type_id' && ev.target.closest('#f-buy')) { buyTotal(buyEv); return; }
     if (ev.target.name === 'email' && ev.target.closest('#f-update')) {
       var um = document.getElementById('upd-mail'); if (um) um.hidden = !ev.target.checked;
       var fu0 = document.getElementById('f-update'); fu0.setAttribute('data-confirm', '0'); fu0.querySelector('[type=submit]').textContent = 'Post the update';
