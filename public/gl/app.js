@@ -520,7 +520,6 @@
       '<label><input type="radio" name="listed" value="1"' + (v.listed === false ? '' : ' checked') + '><span>Public</span></label>' +
       '<label><input type="radio" name="listed" value="0"' + (v.listed === false ? ' checked' : '') + '><span>Link only</span></label></div>' +
       '<p class="quiet small">Public: on your page and in the rsvp.fm feed. Link only: no one finds it unless you send them the link.</p></div>' +
-      '<label class="check"><input type="checkbox" name="guest_invites"' + (v.guest_invites === false ? '' : ' checked') + '><span>Guests can invite friends<small>Guests get a link to share. You see who brought whom; their friends RSVP like everyone else.</small></span></label>' +
       '<p class="err" id="err" hidden></p><div class="acts"><button class="btn" type="submit">' + (id ? 'Save' : 'Create the guestlist') + '</button>' +
       (id ? '<a class="link" href="/e/' + esc(id) + '">Cancel</a>' : '') + '</div></form>';
   }
@@ -824,7 +823,7 @@
       if (e.tickets && e.tickets.length) { h += buyBox(e); setTimeout(tickCountdowns, 0); setTimeout(function () { buyTotal(e); }, 0); buyEv = e; }
       if (j.invite && !j.invite.mine && j.invite.used) h += '<div class="card"><p class="sc">Invitation</p><h2>This link has already been used.</h2><p class="quiet small">Ask ' + esc(host.name) + ' for a new one.</p></div>';
       else if (j.invite && !(j.mine && j.mine.invite_code === j.invite.code)) h += inviteForm(e, j.invite, person || j.mine || {});
-      else if (j.mine) h += statusCard(e, j.mine, id) + inviteFriends(e, j.mine) + afterRsvp(e, j.mine, id);
+      else if (j.mine) h += statusCard(e, j.mine, id) + afterRsvp(e, j.mine, id);
       else if (e.tickets && e.tickets.length) { /* a ticketed event: the tickets are the way in */ }
       else if (!e.open) h += '<div class="card"><h2>The guestlist is closed.</h2><p class="quiet">Thank you for your interest.</p></div>';
       else h += rsvpForm(e, person || {});
