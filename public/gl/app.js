@@ -249,7 +249,9 @@
   function buyBox(e) {
     var rel = e.tickets.some(function (t) { return t.release; });
     var sp = e.tickets.filter(function (t) { return t.special && t.active && t.left !== 0 && !t.ended; });
-    var on = sp.concat(e.tickets.filter(function (t) { return !t.special && (rel ? t.release === 'current' : t.left !== 0); }));
+    // Any ticket not sold out (or closed) can be chosen, at any time; the current release comes first
+    var sellable = function (t) { return rel ? t.release === 'current' || t.release === 'next' : t.left !== 0 && !t.ended; };
+    var on = sp.concat(e.tickets.filter(function (t) { return !t.special && rel && t.release === 'current'; }), e.tickets.filter(function (t) { return !t.special && sellable(t) && t.release !== 'current'; }));
     var h = '<div class="card" id="buy"><p class="sc">Tickets</p>';
     if (!on.length) return h + '<h2>Sold out.</h2></div>';
     // Secret-link tickets (friends & family): set apart, on top, and chosen first
@@ -262,7 +264,7 @@
         '<span class="ts-stub"><span class="ts-price">' + esc(t.label.replace(/\.00$/, '')) + '</span>' +
         '<span class="ts-left">' + (off ? (t.left === 0 ? 'Sold out' : 'Closed') : t.left !== null ? t.left + ' left' : '') + '</span></span></label>';
     }).join('') + e.tickets.filter(function (t) { return !t.special; }).map(function (t, i) {
-      var off = rel ? t.release !== 'current' : (t.left === 0 || t.ended);
+      var off = !sellable(t);
       var left = t.left !== null && t.left !== 0 ? t.left + ' left' : '';
       var ends = ''; // the end of a sale is not shown to buyers (it still closes the ticket on time)
       var note = rel ? (t.release === 'past' ? (t.ended && t.left !== 0 ? 'Closed' : 'Sold out') : t.release === 'next' ? left || 'Next' : [left || 'On sale now', ends].filter(Boolean).join(' · ')) :

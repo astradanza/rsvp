@@ -507,7 +507,8 @@ async function ticketsApi({ request, env, url, method, path, seg, org, person, l
     const t = await env.DB.prepare('SELECT * FROM gl_ticket_types WHERE id = ? AND event_id = ? AND active = 1').bind(Number(b.type_id), e.id).first();
     if (!t || (t.access_code && t.access_code !== String(b.k || '').toLowerCase())) fail(404, 'This ticket is not on sale.');
     if (t.sale_ends && Date.parse(t.sale_ends) <= Date.now()) fail(409, 'Sales for this ticket have ended.');
-    if (e.tix_releases && !t.access_code) { const cur = (await eventTickets(env, e)).find((x) => x.release === 'current'); if (!cur || cur.id !== t.id) fail(409, 'This release is not on sale. Reload the page.'); }
+    // Releases: any release not sold out or closed can be bought (the current one is only the default)
+    if (e.tix_releases && !t.access_code) { const me = (await eventTickets(env, e)).find((x) => x.id === t.id); if (!me || me.release === 'past') fail(409, 'This ticket is sold out. Reload the page.'); }
     if (t.capacity) { const sold = (await soldByType(env, e.id))[t.id] || 0; if (sold + qty > t.capacity) fail(409, t.capacity - sold > 0 ? `Only ${t.capacity - sold} left.` : 'Sold out.'); }
     const tk = token();
     const o = await env.DB.prepare(`INSERT INTO gl_orders (token, event_id, type_id, qty, name, email, amount, currency, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending') RETURNING *`)
