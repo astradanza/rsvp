@@ -197,6 +197,128 @@
       '<p class="quiet small center">No account yet? <a href="/signup">Create one</a></p></div>';
   }
 
+  // ---------- tickets (beta): sold through Stripe Checkout (Apple Pay, Google Pay, cards); one QR code per ticket ----------
+  function loadScript(src) {
+    return new Promise(function (ok, ko) {
+      if (document.querySelector('script[src="' + src + '"]')) return ok();
+      var sc = document.createElement('script'); sc.src = src; sc.onload = ok; sc.onerror = function () { ko(new Error('Could not load ' + src)); }; document.head.appendChild(sc);
+    });
+  }
+  function loadTix() {
+    var slot = document.getElementById('tix-slot'); if (!slot) return;
+    api('GET', '/events/' + current.event.id + '/tickets').then(function (j) {
+      current.tix = j;
+      var st = j.stripe.connected ? (j.stripe.mode === 'live' ? '' : '<p class="small"><span class="tag">test mode</span> Payments are simulated: use the card 4242 4242 4242 4242.</p>') :
+        '<p class="small"><span class="tag">not connected</span> Add your Stripe secret key to the Worker to sell (see the setup notes).</p>';
+      var h = '<div class="box"><span class="sc">Tickets <span class="tag">beta</span></span>' + st;
+      if (j.types.length) {
+        h += '<div class="stats"><div class="stat"><b>' + j.tickets + '</b><span>Sold</span></div><div class="stat"><b>' + j.checked_in + '</b><span>Checked in</span></div><div class="stat"><b style="font-size:20px">' + esc(j.revenue || '0') + '</b><span>Revenue</span></div></div>';
+        h += '<div class="list">' + j.types.map(function (t) {
+          return '<div class="item"><span class="main"><span class="t">' + esc(t.name) + ' · ' + esc(t.label) + '</span><span class="m">' + t.sold + (t.capacity ? ' / ' + t.capacity : '') + ' sold' + (t.active ? '' : ' · sale stopped') + '</span></span>' +
+            '<span class="s"><button class="link small" data-act="tixactive" data-id="' + t.id + '" data-on="' + (t.active ? 1 : 0) + '">' + (t.active ? 'Stop sale' : 'Resume sale') + '</button>' +
+            (t.sold ? '' : ' <button class="link small" data-act="tixdel" data-id="' + t.id + '">Delete</button>') + '</span></div>';
+        }).join('') + '</div>';
+        h += '<div class="acts small"><a class="btn small" href="/e/' + esc(current.event.id) + '/scan">Scan tickets at the door</a></div>';
+      }
+      h += '<form id="f-tixtype" class="stack"><span class="sc" style="font-size:13px">' + (j.types.length ? 'Add a ticket' : 'Sell tickets for this event') + '</span>' +
+        '<label><span>Name</span><input name="name" maxlength="60" placeholder="Early bird, Regular, Door…" required></label>' +
+        '<div class="row2"><label><span>Price</span><input name="price" inputmode="decimal" placeholder="300" required></label>' +
+        '<label><span>Currency</span><select name="currency"><option value="mxn">MXN</option><option value="eur">EUR</option><option value="usd">USD</option><option value="gbp">GBP</option></select></label></div>' +
+        '<label><span>How many (leave empty for no limit)</span><input name="capacity" inputmode="numeric" placeholder="100"></label>' +
+        '<p class="err" hidden></p><div class="acts"><button class="btn small" type="submit">Add the ticket</button></div></form>';
+      if (j.orders.length) h += '<div class="stack"><span class="sc" style="font-size:13px">Sales</span><div class="list">' + j.orders.map(function (o) {
+        return '<div class="item"><span class="main"><span class="t">' + esc(o.name) + ' × ' + o.qty + '</span><span class="m">' + esc(o.email) + ' · ' + esc(o.amount) + ' · ' + esc(ago(o.paid_at || o.created_at)) + '</span></span></div>';
+      }).join('') + '</div></div>';
+      slot.innerHTML = h + '</div>';
+    }).catch(function (e) { slot.innerHTML = '<p class="err small">' + esc(e.message) + '</p>'; });
+  }
+  function buyBox(e) {
+    var on = e.tickets.filter(function (t) { return t.left !== 0; });
+    var h = '<div class="card" id="buy"><p class="sc">Tickets</p>';
+    if (!on.length) return h + '<h2>Sold out.</h2></div>';
+    h += '<form id="f-buy" data-id="' + esc(e.id) + '" class="stack">' + e.tickets.map(function (t, i) {
+      return '<label class="check tix-opt"><input type="radio" name="type_id" value="' + t.id + '"' + (t.left === 0 ? ' disabled' : i === e.tickets.indexOf(on[0]) ? ' checked' : '') + '>' +
+        '<span><b>' + esc(t.name) + '</b> · ' + esc(t.label) + (t.left === 0 ? '<small>Sold out</small>' : t.left !== null && t.left <= 20 ? '<small>' + t.left + ' left</small>' : '') + '</span></label>';
+    }).join('') +
+      '<label><span>How many</span><select name="qty">' + [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(function (n) { return '<option>' + n + '</option>'; }).join('') + '</select></label>' +
+      '<label><span>Full name</span><input name="name" required autocomplete="name" value="' + esc(person ? person.name : '') + '"></label>' +
+      '<label><span>Email</span><input name="email" type="email" required autocomplete="email" value="' + esc(person ? person.email : '') + '"><small class="quiet">Your QR codes are sent there.</small></label>' +
+      '<p class="err" hidden></p><button class="btn wide" type="submit">Pay · Apple Pay or card</button>' +
+      '<p class="quiet small center">Secure payment by Stripe. One QR code per ticket.</p></form></div>';
+    return h;
+  }
+  function viewTickets(tk) {
+    header('guest'); loading();
+    var tries = 0;
+    (function load() {
+      api('GET', '/orders/' + encodeURIComponent(tk)).then(function (j) {
+        var e = j.event, o = j.order;
+        if (o.status === 'pending' && tries++ < 15) {
+          main.innerHTML = '<div class="stack center"><p class="sc">Tickets</p><h1>Confirming your payment…</h1><p class="quiet">This takes a few seconds.</p></div>';
+          return setTimeout(load, 2500);
+        }
+        if (o.status !== 'paid') {
+          main.innerHTML = '<div class="stack center"><h1>No payment yet.</h1><p class="quiet">If you paid, your tickets arrive by email within minutes. Otherwise, <a href="' + esc(eventPath(e, e.host.handle)) + '">go back to the event</a>.</p></div>';
+          return;
+        }
+        loadScript('/qrcode.js').then(function () {
+          var h = '<div class="stack lg"><div class="stack"><p class="sc">' + esc(e.host.name) + ' · ' + o.qty + ' ticket' + (o.qty > 1 ? 's' : '') + '</p><h1>' + esc(e.title) + '</h1>' +
+            (e.starts_at ? '<p class="when">' + esc(whenLine(e)) + '</p>' : '') + ([e.venue, e.city].filter(Boolean).length ? '<p class="quiet">' + esc([e.venue, e.city].filter(Boolean).join(', ')) + '</p>' : '') + '</div>' +
+            '<p class="quiet small">Show a code at the door. Each works once. A screenshot works too.</p>';
+          h += j.tickets.map(function (t, i) {
+            var q = qrcode(0, 'M'); q.addData(t.code); q.make();
+            return '<div class="ticket"><div class="qr">' + q.createSvgTag({ cellSize: 6, margin: 2, scalable: true }) + '</div>' +
+              '<p class="sc">' + esc(o.type) + ' · ' + (i + 1) + ' / ' + j.tickets.length + '</p><p class="code">' + esc(t.code) + '</p>' +
+              (t.checked_in_at ? '<p class="small"><span class="tag">checked in</span></p>' : '') + '</div>';
+          }).join('');
+          h += '<p class="quiet small center">' + esc(o.name) + ' · ' + esc(o.amount) + '</p><p class="center"><a href="' + esc(eventPath(e, e.host.handle)) + '">Event page</a></p>';
+          main.innerHTML = h + '</div>';
+        });
+      }).catch(showError);
+    })();
+  }
+  // The door: camera scan (BarcodeDetector where the browser has it, jsQR otherwise) or a typed code
+  function viewScan(id) {
+    if (!org) return go('/login?next=' + encodeURIComponent('/e/' + id + '/scan'), true);
+    header(); stopScan();
+    main.innerHTML = '<div class="stack lg"><div class="toolbar"><h1>Door</h1><a class="btn small line" href="/e/' + esc(id) + '">Back</a></div>' +
+      '<div id="scan-res" class="scan-res idle"><b>Ready</b><span>Point the camera at a ticket.</span></div>' +
+      '<div class="scanbox"><video id="scan-v" playsinline muted></video><canvas id="scan-c" hidden></canvas></div>' +
+      '<form id="f-scan" class="copyfield"><input name="code" placeholder="Or type the code" autocapitalize="characters" autocomplete="off" style="font-size:16px"><button class="btn small" type="submit">Check</button></form></div>';
+    var v = document.getElementById('scan-v'), last = '', lastAt = 0;
+    scanState.event = id;
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false }).then(function (stream) {
+      scanState.stream = stream; v.srcObject = stream; v.play();
+      var det = ('BarcodeDetector' in window) ? new window.BarcodeDetector({ formats: ['qr_code'] }) : null;
+      var ready = det ? Promise.resolve() : loadScript('/jsqr.js');
+      ready.then(function () {
+        var c = document.getElementById('scan-c'), ctx2 = c.getContext('2d', { willReadFrequently: true });
+        scanState.timer = setInterval(function () {
+          if (!v.videoWidth || scanState.busy) return;
+          var found = function (txt) { if (!txt) return; var now = Date.now(); if (txt === last && now - lastAt < 4000) return; last = txt; lastAt = now; checkTicket(id, txt); };
+          if (det) det.detect(v).then(function (r) { if (r[0]) found(r[0].rawValue); }).catch(function () {});
+          else { c.width = v.videoWidth; c.height = v.videoHeight; ctx2.drawImage(v, 0, 0); var img = ctx2.getImageData(0, 0, c.width, c.height); var r = window.jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' }); if (r) found(r.data); }
+        }, 250);
+      });
+    }).catch(function () { var r = document.getElementById('scan-res'); if (r) r.innerHTML = '<b>No camera</b><span>Allow the camera, or type the codes.</span>'; });
+  }
+  var scanState = {};
+  function stopScan() {
+    if (!scanState) { scanState = {}; return; }
+    if (scanState.timer) clearInterval(scanState.timer);
+    if (scanState.stream) scanState.stream.getTracks().forEach(function (t) { t.stop(); });
+    scanState = {};
+  }
+  function checkTicket(id, txt) {
+    scanState.busy = true;
+    api('POST', '/events/' + id + '/checkin', { code: txt }).then(function (r) {
+      var el = document.getElementById('scan-res'); if (!el) return;
+      el.className = 'scan-res ' + (r.result === 'ok' ? 'ok' : r.result === 'used' ? 'used' : 'bad');
+      el.innerHTML = '<b>' + esc(r.message) + '</b><span>' + esc([r.holder, r.type].filter(Boolean).join(' · ')) + (r.at ? ' · at ' + esc(ago(r.at)) : '') + '</span>';
+      if (navigator.vibrate) navigator.vibrate(r.result === 'ok' ? 80 : [60, 60, 60]);
+    }).catch(function (e) { say(e.message); }).then(function () { setTimeout(function () { scanState.busy = false; }, 900); });
+  }
+
   // ---------- forgotten password: a magic link by email ----------
   function viewForgot() {
     header();
@@ -420,7 +542,7 @@
       '<div class="acts"><button class="btn small" data-act="copylink" data-id="' + esc(url) + '">Copy link</button>' +
       (navigator.share ? '<button class="btn small line" data-act="sharelink" data-id="' + esc(url) + '">Share…</button>' : '') +
       '<a class="btn small line" href="' + esc(eventPath(e, org.handle)) + '" target="_blank" rel="noopener">View page</a></div></div>' +
-      invitesBox() + messageBox() +
+      (org.beta ? '<div id="tix-slot"></div>' : '') + invitesBox() + messageBox() +
       '<div class="stats"><div class="stat"><b>' + c.requests + '</b><span>Requests</span></div><div class="stat"><b>' + c.people + '</b><span>People</span></div>' +
       '<div class="stat"><b>' + c.confirmed + '</b><span>Confirmed</span></div></div>' +
       '<div class="toolbar"><div class="seg" style="min-width:200px"><label><input type="radio" name="sort" value="arrival"' + (current.sort === 'arrival' ? ' checked' : '') + ' data-act="sort"><span>By arrival</span></label>' +
@@ -443,6 +565,7 @@
     h += '<p class="quiet small">' + (mailOn ? 'Guests get an email when they RSVP and when you confirm them.' : 'Emails are not switched on yet: guests see their status on the event page.') + '</p>';
     h += '<hr class="rule"><div class="acts"><a class="link" href="/e/' + esc(e.id) + '/edit">Edit event</a><button class="link" data-act="toggleopen">' + (e.open ? 'Close the guestlist' : 'Reopen the guestlist') + '</button></div></div>';
     main.innerHTML = h;
+    if (org.beta) loadTix();
   }
   // Unique links: "you've been invited to register N names on the guestlist"
   function inviteUrl(code) { return pageUrl(current.event, org.handle) + '?inv=' + code; }
@@ -634,6 +757,7 @@
       if (e.details) h += '<p class="details">' + linkify(e.details) + '</p>';
       if (ph.length > 1) h += '<div class="gallery">' + ph.slice(1).map(function (u) { return '<a href="' + esc(u) + '" target="_blank" rel="noopener"><img src="' + esc(u) + '" alt="" loading="lazy"></a>'; }).join('') + '</div>';
       if (e.details || ph.length > 1) h += '<hr class="rule">';
+      if (e.tickets && e.tickets.length) h += buyBox(e);
       if (j.invite && !j.invite.mine && j.invite.used) h += '<div class="card"><p class="sc">Invitation</p><h2>This link has already been used.</h2><p class="quiet small">Ask ' + esc(host.name) + ' for a new one.</p></div>';
       else if (j.invite && !(j.mine && j.mine.invite_code === j.invite.code)) h += inviteForm(e, j.invite, person || j.mine || {});
       else if (j.mine) h += statusCard(e, j.mine, id) + inviteFriends(e, j.mine) + afterRsvp(e, j.mine, id);
@@ -884,6 +1008,8 @@
     if (act === 'rmphoto') { setFormPhotos(formPhotos().filter(function (u) { return u !== id; })); return; }
     if (act === 'coverphoto') { var pl = formPhotos().filter(function (u) { return u !== id; }); pl.unshift(id); setFormPhotos(pl); return; }
     if (act === 'accounts') { accountsMenu(); return; }
+    if (act === 'tixactive') { api('PATCH', '/events/' + current.event.id + '/tickets/' + id, { active: b.getAttribute('data-on') !== '1' }).then(loadTix).catch(function (e) { say(e.message); }); return; }
+    if (act === 'tixdel') { api('DELETE', '/events/' + current.event.id + '/tickets/' + id).then(loadTix).catch(function (e) { say(e.message); }); return; }
     if (act === 'postcomments') {
       var on = b.getAttribute('data-on') !== '1';
       api('PATCH', '/posts/' + id, { comments: on }).then(function () { say(on ? 'Comments on.' : 'Comments off.'); refreshNews(); }).catch(function (e) { say(e.message); });
@@ -1030,6 +1156,12 @@
       api('POST', '/people/signup', { event: pid, t: tokenFor(pid), password: d.password }).then(function (j) {
         person = j.person; say('Done. Your next invitations will be waiting here.'); viewGuest(pid);
       }).catch(fail);
+    } else if (f.id === 'f-tixtype') {
+      api('POST', '/events/' + current.event.id + '/tickets', d).then(function () { say('Ticket added. It is on sale on your event page.'); loadTix(); }).catch(fail);
+    } else if (f.id === 'f-buy') {
+      api('POST', '/p/' + f.getAttribute('data-id') + '/checkout', d).then(function (r) { location.href = r.url; }).catch(fail);
+    } else if (f.id === 'f-scan') {
+      if (d.code) checkTicket(scanState.event, d.code); f.reset(); btn.disabled = false;
     } else if (f.id === 'f-post') {
       if (!d.text && !d.photo) { fail(new Error('Write something or add a photo.')); return; }
       api('POST', '/posts', { text: d.text, photo: d.photo, comments: !!d.comments }).then(function () {
@@ -1074,6 +1206,7 @@
 
   // ---------- routing ----------
   function route() {
+    stopScan();
     var p = location.pathname.replace(/\/+$/, '') || '/', m;
     if (p === '/') return org ? viewEvents() : person ? viewMe() : standalone ? viewLogin() : viewWelcome();
     if (p === '/login') return viewLogin();
@@ -1091,6 +1224,8 @@
       return api('GET', '/invite/' + m[1].toLowerCase()).then(function (r) { go(r.handle ? '/' + r.handle : '/', true); }).catch(function () { go('/', true); });
     }
     if ((m = /^\/e\/([a-z0-9]{4,16})\/edit$/.exec(p))) return viewEdit(m[1]);
+    if ((m = /^\/e\/([a-z0-9]{4,16})\/scan$/.exec(p))) return viewScan(m[1]);
+    if ((m = /^\/tickets\/([A-Za-z0-9_-]{20,64})$/.exec(p))) return viewTickets(m[1]);
     if ((m = /^\/([a-z0-9][a-z0-9_-]{1,29})\/([a-z0-9][a-z0-9-]{0,59})$/i.exec(p)) && m[1] !== 'e' && m[1] !== 'i') {
       loading();
       return api('GET', '/resolve/' + m[1].toLowerCase() + '/' + m[2].toLowerCase()).then(function (r) { viewGuest(r.id); })

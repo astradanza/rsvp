@@ -4,7 +4,7 @@
 // can opt in to the organizer's next invitations and keep a guest account to receive them here.
 // Own tables (gl_*), own sessions, own static app (public/gl/).
 
-import { mailEnabled, mailRsvp, mailConfirmed, mailMessage, mailReset, mailAdmin, adminRecap, sendDigests, prefsFor } from './gl-mail.js';
+import { mailEnabled, mailRsvp, mailConfirmed, mailMessage, mailReset, mailAdmin, adminRecap, mailTickets, sendDigests, prefsFor } from './gl-mail.js';
 import { migrateV1 } from './gl-migrate.js';
 import { vapidKeys, validSubscription, pushTo } from './gl-push.js';
 
@@ -25,7 +25,7 @@ function customOf(o) {
 }
 function themeOf(theme, custom) { return theme === 'custom' && custom ? 'custom' : THEMES.includes(theme) ? theme : DEFAULT_THEME; }
 const RESERVED = new Set(['api', 'e', 'i', 'new', 'login', 'signup', 'logout', 'account', 'community', 'me', 'img', 'app', 'style', 'favicon', 'prefs',
-  'admin', 'settings', 'help', 'about', 'terms', 'privacy', 'www', 'list', 'rsvp', 'events', 'event', 'invite', 'join', 'guest', 'guests', 'forgot', 'reset', 'password', 'news', 'feed']);
+  'admin', 'settings', 'help', 'about', 'terms', 'privacy', 'www', 'list', 'rsvp', 'events', 'event', 'invite', 'join', 'guest', 'guests', 'forgot', 'reset', 'password', 'news', 'feed', 'tickets', 'scan', 't']);
 const ADMINS = new Set(['astradanza']);
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,29}$/;
 
@@ -133,6 +133,17 @@ async function ensureSchema(env) {
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_push (endpoint TEXT PRIMARY KEY, email TEXT NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
     env.DB.prepare('CREATE INDEX IF NOT EXISTS gl_push_email ON gl_push(email)'),
+    // Tickets (beta): types per event, orders paid through Stripe Checkout, one QR code per ticket
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_ticket_types (id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL REFERENCES gl_events(id) ON DELETE CASCADE,
+      name TEXT NOT NULL, price INTEGER NOT NULL, currency TEXT NOT NULL, capacity INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_orders (id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT NOT NULL UNIQUE, event_id TEXT NOT NULL, type_id INTEGER NOT NULL,
+      qty INTEGER NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL, amount INTEGER NOT NULL, currency TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+      stripe_session TEXT, paid_at TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS gl_orders_event ON gl_orders(event_id, status)'),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS gl_orders_session ON gl_orders(stripe_session)'),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL UNIQUE, order_id INTEGER NOT NULL, event_id TEXT NOT NULL,
+      type_id INTEGER NOT NULL, holder TEXT NOT NULL DEFAULT '', checked_in_at TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS gl_tickets_order ON gl_tickets(order_id)'),
     // Magic links (forgotten password): one use, one hour
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_resets (token TEXT PRIMARY KEY, kind TEXT NOT NULL, account_id INTEGER NOT NULL, email TEXT NOT NULL,
       used INTEGER NOT NULL DEFAULT 0, expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
@@ -250,7 +261,7 @@ async function startPersonSession(env, personId, url) {
 // ---------- shapes ----------
 const orgShape = (o) => ({
   name: o.name, kind: o.kind, email: o.email, handle: o.handle, bio: o.bio || '', logo: o.logo || '',
-  theme: themeOf(o.theme, customOf(o)), custom: customOf(o), visibility: o.visibility || 'public', join: o.join_mode === 'approval' ? 'approval' : 'open', invite_token: o.invite_token
+  theme: themeOf(o.theme, customOf(o)), custom: customOf(o), visibility: o.visibility || 'public', join: o.join_mode === 'approval' ? 'approval' : 'open', beta: ADMINS.has(o.handle), invite_token: o.invite_token
 });
 const publicOrg = (o) => ({ name: o.name, kind: o.kind, handle: o.handle, bio: o.bio || '', logo: o.logo || '', theme: themeOf(o.theme, customOf(o)), custom: customOf(o), visibility: o.visibility || 'public', join: o.join_mode === 'approval' ? 'approval' : 'open' });
 const personShape = (p) => ({ name: p.name, email: p.email });
@@ -369,6 +380,201 @@ async function memberOf(env, orgId, email) {
 }
 
 // ---------- API ----------
+// ---------- tickets (beta, Astradanza only): Stripe Checkout (Apple Pay, cards), QR codes, door check-in ----------
+const TIX_CURRENCIES = ['mxn', 'eur', 'usd', 'gbp'];
+const tixBeta = (o) => !!o && ADMINS.has(o.handle);
+const money = (cents, cur) => {
+  try { return new Intl.NumberFormat('en', { style: 'currency', currency: cur.toUpperCase() }).format(cents / 100); } catch { return (cents / 100).toFixed(2) + ' ' + cur.toUpperCase(); }
+};
+const stripeMode = (env) => (env.STRIPE_SECRET_KEY ? (/_live_/.test(env.STRIPE_SECRET_KEY) ? 'live' : 'test') : '');
+// Stripe's API takes form-encoded bodies; nested objects as a[b][c]=v
+function formEncode(obj, prefix, out = []) {
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined || v === null) continue;
+    const key = prefix ? `${prefix}[${k}]` : k;
+    if (typeof v === 'object') formEncode(v, key, out);
+    else out.push(encodeURIComponent(key) + '=' + encodeURIComponent(String(v)));
+  }
+  return out.join('&');
+}
+async function stripe(env, method, path, params) {
+  if (!env.STRIPE_SECRET_KEY) fail(503, 'Payments are not connected yet.');
+  const r = await fetch((env.STRIPE_API_BASE || 'https://api.stripe.com') + '/v1' + path, {
+    method, headers: { authorization: 'Bearer ' + env.STRIPE_SECRET_KEY, 'content-type': 'application/x-www-form-urlencoded', 'stripe-version': '2024-06-20' },
+    body: method === 'GET' ? undefined : formEncode(params || {})
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { console.error('stripe', path, r.status, JSON.stringify(j.error || j)); fail(502, (j.error && j.error.message) || 'Payment service error.'); }
+  return j;
+}
+async function metaGet(env, key) { const r = await env.DB.prepare('SELECT value FROM gl_meta WHERE key = ?').bind(key).first(); return r ? r.value : ''; }
+async function metaSet(env, key, value) { await env.DB.prepare('INSERT INTO gl_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(key, value).run(); }
+const tixCode = () => code(10).toUpperCase();
+const typeShape = (t, sold) => ({ id: t.id, name: t.name, price: t.price, currency: t.currency, capacity: t.capacity, active: !!t.active, sold: sold || 0,
+  left: t.capacity ? Math.max(0, t.capacity - (sold || 0)) : null, label: money(t.price, t.currency) });
+// Sold = paid tickets, plus orders still being paid (30 minutes) so the last tickets are not sold twice
+async function soldByType(env, eventId) {
+  const rows = (await env.DB.prepare(`SELECT type_id, SUM(qty) AS n FROM gl_orders WHERE event_id = ? AND (status = 'paid' OR (status = 'pending' AND created_at > datetime('now', '-35 minutes'))) GROUP BY type_id`).bind(eventId).all()).results;
+  const m = {}; rows.forEach((r) => { m[r.type_id] = r.n; }); return m;
+}
+async function eventTickets(env, e) {
+  const types = (await env.DB.prepare('SELECT * FROM gl_ticket_types WHERE event_id = ? ORDER BY id').bind(e.id).all()).results;
+  if (!types.length) return [];
+  const sold = await soldByType(env, e.id);
+  return types.map((t) => typeShape(t, sold[t.id]));
+}
+// Paid: make the tickets (once), put the buyer on the guestlist, email the QR link
+async function fulfillOrder(env, order, later) {
+  const r = await env.DB.prepare(`UPDATE gl_orders SET status = 'paid', paid_at = datetime('now') WHERE id = ? AND status = 'pending'`).bind(order.id).run();
+  if (!r.meta.changes) return false;
+  const e = await env.DB.prepare('SELECT * FROM gl_events WHERE id = ?').bind(order.event_id).first();
+  const o = await env.DB.prepare('SELECT * FROM gl_orgs WHERE id = ?').bind(e.org_id).first();
+  const t = await env.DB.prepare('SELECT * FROM gl_ticket_types WHERE id = ?').bind(order.type_id).first();
+  const stmts = [];
+  for (let i = 0; i < order.qty; i++) stmts.push(env.DB.prepare('INSERT INTO gl_tickets (code, order_id, event_id, type_id, holder) VALUES (?, ?, ?, ?, ?)').bind(tixCode(), order.id, e.id, order.type_id, order.name));
+  await env.DB.batch(stmts);
+  const prev = await env.DB.prepare('SELECT * FROM gl_guests WHERE event_id = ? AND email = ?').bind(e.id, order.email).first();
+  if (prev) await env.DB.prepare(`UPDATE gl_guests SET status = 'confirmed', plus = MAX(plus, ?), updated_at = datetime('now') WHERE id = ?`).bind(Math.min(order.qty - 1, 9), prev.id).run();
+  else await env.DB.prepare(`INSERT INTO gl_guests (event_id, name, email, plus, status, token) VALUES (?, ?, ?, ?, 'confirmed', ?)`).bind(e.id, order.name, order.email, Math.min(order.qty - 1, 9), token()).run();
+  const p = mailTickets(env, { event: e, org: o, order, count: order.qty, typeName: t ? t.name : 'Ticket', amount: money(order.amount, order.currency) })
+    .then(() => mailAdmin(env, `Ticket sale: ${order.qty} × ${t ? t.name : 'ticket'} · ${e.title}`, `${order.name} (${order.email}) bought ${order.qty} × ${t ? t.name : 'ticket'} for ${e.title}: ${money(order.amount, order.currency)}.`));
+  if (later) await later(p); else await p;
+  return true;
+}
+async function verifyStripeSignature(secret, payload, header) {
+  const parts = Object.fromEntries(String(header || '').split(',').map((x) => x.split('=')).filter((x) => x.length === 2).map(([k, v]) => [k.trim(), v.trim()]));
+  const sigs = String(header || '').split(',').filter((x) => x.trim().startsWith('v1=')).map((x) => x.trim().slice(3));
+  if (!parts.t || !sigs.length || Math.abs(Date.now() / 1000 - Number(parts.t)) > 600) return false;
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(parts.t + '.' + payload)));
+  const hex = [...mac].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return sigs.some((s) => s.length === hex.length && [...s].reduce((a, c, i) => a | (c.charCodeAt(0) ^ hex.charCodeAt(i)), 0) === 0);
+}
+const orderShape = (o) => ({ id: o.id, name: o.name, email: o.email, qty: o.qty, amount: money(o.amount, o.currency), status: o.status, type_id: o.type_id, created_at: o.created_at, paid_at: o.paid_at });
+
+async function ticketsApi({ request, env, url, method, path, seg, org, person, later }) {
+  // Stripe tells us a payment went through
+  if (path === '/api/stripe/webhook' && method === 'POST') {
+    const payload = await request.text();
+    const secret = env.STRIPE_WEBHOOK_SECRET || await metaGet(env, 'stripe_wh_secret_' + stripeMode(env));
+    if (!secret || !(await verifyStripeSignature(secret, payload, request.headers.get('stripe-signature')))) return json({ error: 'bad signature' }, 400);
+    const ev = JSON.parse(payload);
+    if (ev.type === 'checkout.session.completed' || ev.type === 'checkout.session.async_payment_succeeded') {
+      const s = ev.data.object;
+      const o = await env.DB.prepare('SELECT * FROM gl_orders WHERE stripe_session = ?').bind(s.id).first();
+      if (o && s.payment_status === 'paid') await fulfillOrder(env, o, later);
+    }
+    if (ev.type === 'checkout.session.expired') await env.DB.prepare(`UPDATE gl_orders SET status = 'expired' WHERE stripe_session = ? AND status = 'pending'`).bind(ev.data.object.id).run();
+    return json({ received: true });
+  }
+  // The buyer's tickets (the link in their email and the page they land on after paying)
+  if (seg[0] === 'orders' && seg[1] && method === 'GET') {
+    let o = await env.DB.prepare('SELECT * FROM gl_orders WHERE token = ?').bind(seg[1]).first();
+    if (!o) fail(404, 'These tickets do not exist.');
+    if (o.status === 'pending' && o.stripe_session && env.STRIPE_SECRET_KEY) {
+      // Back from Stripe before the webhook: ask Stripe directly
+      const s = await stripe(env, 'GET', '/checkout/sessions/' + encodeURIComponent(o.stripe_session));
+      if (s.payment_status === 'paid') { await fulfillOrder(env, o, later); o = await env.DB.prepare('SELECT * FROM gl_orders WHERE id = ?').bind(o.id).first(); }
+    }
+    const e = await env.DB.prepare('SELECT e.*, g.name AS org_name, g.handle AS org_handle FROM gl_events e JOIN gl_orgs g ON g.id = e.org_id WHERE e.id = ?').bind(o.event_id).first();
+    const t = await env.DB.prepare('SELECT * FROM gl_ticket_types WHERE id = ?').bind(o.type_id).first();
+    const tickets = (await env.DB.prepare('SELECT code, holder, checked_in_at FROM gl_tickets WHERE order_id = ? ORDER BY id').bind(o.id).all()).results;
+    return json({ order: { ...orderShape(o), email: undefined, type: t ? t.name : 'Ticket' }, event: { ...eventShape(e), auto_confirm: undefined, host: { name: e.org_name, handle: e.org_handle } }, tickets });
+  }
+  // Checkout: one ticket type, a quantity; Stripe's page takes Apple Pay, Google Pay and cards
+  if (seg[0] === 'p' && seg[1] && seg[2] === 'checkout' && method === 'POST') {
+    const e = await env.DB.prepare('SELECT e.*, o.handle AS org_handle, o.name AS org_name FROM gl_events e JOIN gl_orgs o ON o.id = e.org_id WHERE e.id = ?').bind(seg[1]).first();
+    if (!e || !ADMINS.has(e.org_handle)) fail(404, 'That event does not exist.');
+    const b = await body(request);
+    const name = str(b.name, 80), email = str(b.email, 160).toLowerCase(), qty = Math.max(1, Math.min(10, parseInt(b.qty, 10) || 1));
+    if (!name) fail(400, 'Enter your name.');
+    if (!EMAIL_RE.test(email)) fail(400, 'Enter a valid email address: your tickets go there.');
+    const t = await env.DB.prepare('SELECT * FROM gl_ticket_types WHERE id = ? AND event_id = ? AND active = 1').bind(Number(b.type_id), e.id).first();
+    if (!t) fail(404, 'This ticket is not on sale.');
+    if (t.capacity) { const sold = (await soldByType(env, e.id))[t.id] || 0; if (sold + qty > t.capacity) fail(409, t.capacity - sold > 0 ? `Only ${t.capacity - sold} left.` : 'Sold out.'); }
+    const tk = token();
+    const o = await env.DB.prepare(`INSERT INTO gl_orders (token, event_id, type_id, qty, name, email, amount, currency, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending') RETURNING *`)
+      .bind(tk, e.id, t.id, qty, name, email, t.price * qty, t.currency).first();
+    const evUrl = url.origin + (e.slug ? `/${e.org_handle}/${e.slug}` : `/${e.id}`);
+    const s = await stripe(env, 'POST', '/checkout/sessions', {
+      mode: 'payment', customer_email: email, client_reference_id: String(o.id),
+      success_url: `${url.origin}/tickets/${tk}`, cancel_url: evUrl,
+      expires_at: Math.floor(Date.now() / 1000) + 31 * 60,
+      line_items: { 0: { quantity: qty, price_data: { currency: t.currency, unit_amount: t.price, product_data: { name: `${e.title} · ${t.name}` } } } },
+      payment_intent_data: { description: `${e.title} · ${t.name} × ${qty}`, metadata: { order: String(o.id), event: e.id } },
+      metadata: { order: String(o.id), event: e.id }
+    });
+    await env.DB.prepare('UPDATE gl_orders SET stripe_session = ? WHERE id = ?').bind(s.id, o.id).run();
+    return json({ url: s.url });
+  }
+  if (seg[0] !== 'events' || !seg[1] || !['tickets', 'orders', 'checkin'].includes(seg[2])) {
+    if (path === '/api/tix/status' && method === 'GET') {
+      if (!tixBeta(org)) fail(404, 'Not found.');
+      return json({ connected: !!env.STRIPE_SECRET_KEY, mode: stripeMode(env), webhook: !!(env.STRIPE_WEBHOOK_SECRET || await metaGet(env, 'stripe_wh_secret_' + stripeMode(env))) });
+    }
+    // Create the Stripe webhook for this site (once per mode); its secret stays in the database
+    if (path === '/api/tix/connect' && method === 'POST') {
+      if (!tixBeta(org)) fail(404, 'Not found.');
+      const mode = stripeMode(env);
+      if (!mode) fail(503, 'Add the Stripe secret key to the Worker first.');
+      if (!(await metaGet(env, 'stripe_wh_secret_' + mode))) {
+        const w = await stripe(env, 'POST', '/webhook_endpoints', { url: `${url.origin}/api/stripe/webhook`, enabled_events: { 0: 'checkout.session.completed', 1: 'checkout.session.async_payment_succeeded', 2: 'checkout.session.expired' }, description: 'rsvp.fm tickets' });
+        await metaSet(env, 'stripe_wh_secret_' + mode, w.secret);
+        await metaSet(env, 'stripe_wh_id_' + mode, w.id);
+      }
+      return json({ connected: true, mode, webhook: true });
+    }
+    return null;
+  }
+  // --- host side (beta) ---
+  if (!org) fail(401, 'Log in first.');
+  if (!tixBeta(org)) fail(404, 'Not found.');
+  const e = await ownEvent(env, org, seg[1]);
+  if (seg[2] === 'tickets' && !seg[3] && method === 'GET') {
+    const orders = (await env.DB.prepare(`SELECT * FROM gl_orders WHERE event_id = ? AND status = 'paid' ORDER BY id DESC`).bind(e.id).all()).results;
+    const { n, inn } = await env.DB.prepare('SELECT COUNT(*) AS n, SUM(checked_in_at IS NOT NULL) AS inn FROM gl_tickets WHERE event_id = ?').bind(e.id).first();
+    const totals = {}; orders.forEach((o) => { totals[o.currency] = (totals[o.currency] || 0) + o.amount; });
+    return json({ types: await eventTickets(env, e), orders: orders.map(orderShape), tickets: n || 0, checked_in: inn || 0,
+      revenue: Object.entries(totals).map(([c, v]) => money(v, c)).join(' + '), stripe: { connected: !!env.STRIPE_SECRET_KEY, mode: stripeMode(env) } });
+  }
+  if (seg[2] === 'tickets' && !seg[3] && method === 'POST') {
+    const b = await body(request);
+    const name = str(b.name, 60) || 'Ticket';
+    const price = Math.round(Number(String(b.price || '').replace(',', '.')) * 100);
+    const currency = TIX_CURRENCIES.includes(String(b.currency).toLowerCase()) ? String(b.currency).toLowerCase() : 'mxn';
+    if (!Number.isFinite(price) || price < 1000 && currency === 'mxn' || price < 50) fail(400, currency === 'mxn' ? 'Set a price of at least 10 MXN.' : 'Set a price of at least 0.50.');
+    const capacity = Math.max(0, Math.min(100000, parseInt(b.capacity, 10) || 0));
+    const t = await env.DB.prepare('INSERT INTO gl_ticket_types (event_id, name, price, currency, capacity) VALUES (?, ?, ?, ?, ?) RETURNING *').bind(e.id, name, price, currency, capacity).first();
+    return json({ type: typeShape(t, 0) });
+  }
+  if (seg[2] === 'tickets' && seg[3]) {
+    const t = await env.DB.prepare('SELECT * FROM gl_ticket_types WHERE id = ? AND event_id = ?').bind(Number(seg[3]), e.id).first();
+    if (!t) fail(404, 'That ticket type is gone.');
+    if (method === 'PATCH') {
+      const b = await body(request);
+      await env.DB.prepare('UPDATE gl_ticket_types SET active = ? WHERE id = ?').bind(b.active ? 1 : 0, t.id).run();
+      return json({ ok: true });
+    }
+    if (method === 'DELETE') {
+      if (await env.DB.prepare(`SELECT 1 FROM gl_orders WHERE type_id = ? AND status = 'paid' LIMIT 1`).bind(t.id).first()) fail(409, 'Tickets of this type were sold: stop the sale instead.');
+      await env.DB.prepare('DELETE FROM gl_ticket_types WHERE id = ?').bind(t.id).run();
+      return json({ ok: true });
+    }
+  }
+  // At the door: a scanned code (or the URL inside the QR), checked in once
+  if (seg[2] === 'checkin' && method === 'POST') {
+    const b = await body(request);
+    const c = String(b.code || '').trim().replace(/^.*\/t\//, '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 20);
+    const tk = c ? await env.DB.prepare('SELECT k.*, t.name AS type FROM gl_tickets k LEFT JOIN gl_ticket_types t ON t.id = k.type_id WHERE k.code = ?').bind(c).first() : null;
+    if (!tk) return json({ result: 'unknown', message: 'Unknown code.' });
+    if (tk.event_id !== e.id) return json({ result: 'other', message: 'This ticket is for another event.' });
+    if (tk.checked_in_at) return json({ result: 'used', message: 'Already scanned', holder: tk.holder, type: tk.type, at: tk.checked_in_at });
+    await env.DB.prepare(`UPDATE gl_tickets SET checked_in_at = datetime('now') WHERE id = ? AND checked_in_at IS NULL`).bind(tk.id).run();
+    return json({ result: 'ok', message: 'Welcome', holder: tk.holder, type: tk.type });
+  }
+  fail(404, 'Not found.');
+}
+
 async function api(request, env, url, ctx) {
   // run work after the response when possible (emails)
   const later = (p) => { if (ctx && ctx.waitUntil) ctx.waitUntil(p.catch((e) => console.error(e))); else return p; };
@@ -384,6 +590,7 @@ async function api(request, env, url, ctx) {
   const need = () => { if (!org) fail(401, 'Log in first.'); return org; };
 
   if (path === '/api/session' && method === 'GET') return json({ org: org ? orgShape(org) : null, person: person ? personShape(person) : null, mail: mailEnabled(env) });
+  const tx = await ticketsApi({ request, env, url, method, path, seg, org, person, later }); if (tx) return tx;
 
   // --- push notifications ---
   if (path === '/api/push/key' && method === 'GET') return json({ key: (await vapidKeys(env)).publicKey });
@@ -1004,8 +1211,9 @@ async function api(request, env, url, ctx) {
       }
       const insider = (mine && mine.status === 'confirmed') || (org && org.id === e.org_id);
       const updates = (await env.DB.prepare(`SELECT * FROM gl_updates WHERE event_id = ? ${insider ? '' : 'AND guests_only = 0'} ORDER BY id DESC LIMIT 50`).bind(e.id).all()).results;
+      const tickets = ADMINS.has(e.org_handle) ? (await eventTickets(env, e)).filter((t) => t.active).map((t) => ({ ...t, sold: undefined, capacity: undefined })) : [];
       return json({
-        event: { ...shape, updates: updates.map(updateShape) }, invite,
+        event: { ...shape, updates: updates.map(updateShape), tickets }, invite,
         mine: mine ? { name: mine.name, email: mine.email, plus: mine.plus, names: namesOf(mine), invite_code: mine.invite_code || '', status: mine.status, consent: !!mine.consent, ref: e.guest_invites ? refOf(mine) : '', has_account: !!person || !!(await env.DB.prepare('SELECT 1 FROM gl_people WHERE email = ?').bind(mine.email).first()) } : null,
         person: person ? personShape(person) : null
       });
@@ -1143,7 +1351,7 @@ export async function handleGuestlist(request, env, url, ctx) {
   }
   // Static files live in public/gl/; every other path is the app.
   if (/^\/avatars\/\d+\.webp$/.test(url.pathname)) return env.ASSETS.fetch(request);
-  const file = /^\/(app\.js|style\.css|favicon\.svg|favicon\.ico|favicon-32\.png|favicon-48\.png|sw\.js|manifest\.webmanifest|icon-192\.png|icon-512\.png|apple-touch-icon\.png|badge-72\.png)$/.exec(url.pathname);
+  const file = /^\/(app\.js|style\.css|favicon\.svg|favicon\.ico|favicon-32\.png|favicon-48\.png|qrcode\.js|jsqr\.js|sw\.js|manifest\.webmanifest|icon-192\.png|icon-512\.png|apple-touch-icon\.png|badge-72\.png)$/.exec(url.pathname);
   const target = new URL(file ? '/gl/' + file[1] : '/gl/', url);
   const res = await env.ASSETS.fetch(new Request(target, request));
   if (file) return res;

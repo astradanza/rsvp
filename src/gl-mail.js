@@ -179,6 +179,24 @@ export async function mailConfirmed(env, { event, org, guest }) {
   return mailRsvp(env, { event, org, guest: { ...guest, status: 'confirmed' } });
 }
 
+// Tickets bought: one email with the link to the QR codes
+export async function mailTickets(env, { event, org, order, count, typeName, amount }) {
+  const link = `${appUrl(env)}/tickets/${encodeURIComponent(order.token)}`;
+  const where = [event.venue, event.city].filter(Boolean).map(esc).join(', ');
+  return send(env, {
+    to: order.email, fromHandle: org.handle, fromName: org.name, kind: 'tickets', event_id: event.id, org_id: org.id,
+    subject: `Your ticket${count > 1 ? 's' : ''} · ${event.title}`,
+    body: {
+      kicker: 'Tickets', title: `${count} ticket${count > 1 ? 's' : ''} for ${esc(event.title)}`,
+      lines: [`<strong>${esc(event.title)}</strong>${when(event) ? '<br>' + esc(when(event)) : ''}${where ? '<br>' + where : ''}`, `${esc(typeName)} × ${count} · ${esc(amount)}`,
+        'Show the QR code at the door. Each code works once.'],
+      button: { label: 'Show my tickets', href: link },
+      after: ['Keep this email: the button opens your QR codes.'],
+      footer: `${esc(org.name)} sold you these tickets through rsvp.fm. Payment by Stripe.`
+    }
+  });
+}
+
 // ---------- daily digest: pending invitations ----------
 // For each guest who joined at least one page: new invitations (open upcoming events they haven't answered)
 // and, once, a reminder for invitations still waiting when the event is less than three days away.
