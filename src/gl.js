@@ -171,7 +171,8 @@ async function ensureSchema(env) {
   await addColumns(env, 'gl_guests', [['consent', 'INTEGER NOT NULL DEFAULT 0'], ['names', "TEXT NOT NULL DEFAULT ''"], ['invite_code', 'TEXT'], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['via', 'INTEGER']]);
   await addColumns(env, 'gl_events', [['listed', 'INTEGER NOT NULL DEFAULT 1'], ['slug', 'TEXT'], ['photos', "TEXT NOT NULL DEFAULT '[]'"],
     ['msg_subject', "TEXT NOT NULL DEFAULT ''"], ['msg_text', "TEXT NOT NULL DEFAULT ''"], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['msg_auto', 'INTEGER NOT NULL DEFAULT 0'], ['msg_photo', "TEXT NOT NULL DEFAULT ''"], ['guest_invites', 'INTEGER NOT NULL DEFAULT 1'], ['tix_releases', 'INTEGER NOT NULL DEFAULT 0']]);
-  await addColumns(env, 'gl_ticket_types', [['sale_ends', "TEXT NOT NULL DEFAULT ''"]]);
+  await addColumns(env, 'gl_ticket_types', [['sale_ends', "TEXT NOT NULL DEFAULT ''"], ['access_code', "TEXT NOT NULL DEFAULT ''"]]);
+  await addColumns(env, 'gl_events', [['alias', "TEXT NOT NULL DEFAULT ''"]]);
   await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS gl_orgs_handle ON gl_orgs(handle)').run();
   // guests who RSVP'd before communities existed join their organizer's community (no email consent)
   if (!(await env.DB.prepare('SELECT 1 FROM gl_contacts LIMIT 1').first())) {
@@ -415,22 +416,25 @@ const tixCode = () => code(10).toUpperCase();
 // sale_ends: an ISO time (UTC) after which this ticket is no longer sold, '' for none
 const typeShape = (t, sold) => ({ id: t.id, name: t.name, price: t.price, currency: t.currency, capacity: t.capacity, active: !!t.active, sold: sold || 0,
   left: t.capacity ? Math.max(0, t.capacity - (sold || 0)) : null, label: money(t.price, t.currency),
-  sale_ends: t.sale_ends || '', ended: !!t.sale_ends && Date.parse(t.sale_ends) <= Date.now() });
+  sale_ends: t.sale_ends || '', ended: !!t.sale_ends && Date.parse(t.sale_ends) <= Date.now(), special: !!t.access_code, access_code: t.access_code || '' });
 // Sold = paid tickets, plus orders still being paid (30 minutes) so the last tickets are not sold twice
 async function soldByType(env, eventId) {
   const rows = (await env.DB.prepare(`SELECT type_id, SUM(qty) AS n FROM gl_orders WHERE event_id = ? AND (status = 'paid' OR (status = 'pending' AND created_at > datetime('now', '-35 minutes'))) GROUP BY type_id`).bind(eventId).all()).results;
   const m = {}; rows.forEach((r) => { m[r.type_id] = r.n; }); return m;
 }
-async function eventTickets(env, e) {
-  const types = (await env.DB.prepare('SELECT * FROM gl_ticket_types WHERE event_id = ? ORDER BY id').bind(e.id).all()).results;
+// key: the word of a secret link (rsvp.fm/<handle>/<event>/<key>); tickets with an access code only show with it (all = the host's view)
+async function eventTickets(env, e, key, all) {
+  const types = (await env.DB.prepare('SELECT * FROM gl_ticket_types WHERE event_id = ? ORDER BY id').bind(e.id).all()).results
+    .filter((t) => all || !t.access_code || t.access_code === String(key || '').toLowerCase());
   if (!types.length) return [];
   const sold = await soldByType(env, e.id);
   const list = types.map((t) => typeShape(t, sold[t.id]));
+  const open = list.filter((t) => !t.special);
   // Releases (first release, second, third…): one on sale at a time, the next opens when the one before sells out or is stopped
   if (e.tix_releases) {
-    const cur = list.find((t) => t.active && t.left !== 0 && !t.ended);
+    const cur = open.find((t) => t.active && t.left !== 0 && !t.ended);
     let seen = false;
-    list.forEach((t) => { t.release = t === cur ? 'current' : seen ? 'next' : 'past'; if (t === cur) seen = true; });
+    open.forEach((t) => { t.release = t === cur ? 'current' : seen ? 'next' : 'past'; if (t === cur) seen = true; });
   }
   return list;
 }
@@ -501,9 +505,9 @@ async function ticketsApi({ request, env, url, method, path, seg, org, person, l
     if (!name) fail(400, 'Enter your name.');
     if (!EMAIL_RE.test(email)) fail(400, 'Enter a valid email address: your tickets go there.');
     const t = await env.DB.prepare('SELECT * FROM gl_ticket_types WHERE id = ? AND event_id = ? AND active = 1').bind(Number(b.type_id), e.id).first();
-    if (!t) fail(404, 'This ticket is not on sale.');
+    if (!t || (t.access_code && t.access_code !== String(b.k || '').toLowerCase())) fail(404, 'This ticket is not on sale.');
     if (t.sale_ends && Date.parse(t.sale_ends) <= Date.now()) fail(409, 'Sales for this ticket have ended.');
-    if (e.tix_releases) { const cur = (await eventTickets(env, e)).find((x) => x.release === 'current'); if (!cur || cur.id !== t.id) fail(409, 'This release is not on sale. Reload the page.'); }
+    if (e.tix_releases && !t.access_code) { const cur = (await eventTickets(env, e)).find((x) => x.release === 'current'); if (!cur || cur.id !== t.id) fail(409, 'This release is not on sale. Reload the page.'); }
     if (t.capacity) { const sold = (await soldByType(env, e.id))[t.id] || 0; if (sold + qty > t.capacity) fail(409, t.capacity - sold > 0 ? `Only ${t.capacity - sold} left.` : 'Sold out.'); }
     const tk = token();
     const o = await env.DB.prepare(`INSERT INTO gl_orders (token, event_id, type_id, qty, name, email, amount, currency, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending') RETURNING *`)
@@ -547,7 +551,7 @@ async function ticketsApi({ request, env, url, method, path, seg, org, person, l
     const orders = (await env.DB.prepare(`SELECT * FROM gl_orders WHERE event_id = ? AND status = 'paid' ORDER BY id DESC`).bind(e.id).all()).results;
     const { n, inn } = await env.DB.prepare('SELECT COUNT(*) AS n, SUM(checked_in_at IS NOT NULL) AS inn FROM gl_tickets WHERE event_id = ?').bind(e.id).first();
     const totals = {}; orders.forEach((o) => { totals[o.currency] = (totals[o.currency] || 0) + o.amount; });
-    return json({ releases: !!e.tix_releases, types: await eventTickets(env, e), orders: orders.map(orderShape), tickets: n || 0, checked_in: inn || 0,
+    return json({ releases: !!e.tix_releases, types: await eventTickets(env, e, '', true), orders: orders.map(orderShape), tickets: n || 0, checked_in: inn || 0,
       revenue: Object.entries(totals).map(([c, v]) => money(v, c)).join(' + '), stripe: { connected: !!env.STRIPE_SECRET_KEY, mode: stripeMode(env) } });
   }
   if (seg[2] === 'tickets' && seg[3] === 'releases' && method === 'PATCH') {
@@ -562,7 +566,8 @@ async function ticketsApi({ request, env, url, method, path, seg, org, person, l
     const currency = TIX_CURRENCIES.includes(String(b.currency).toLowerCase()) ? String(b.currency).toLowerCase() : 'mxn';
     if (!Number.isFinite(price) || price < 1000 && currency === 'mxn' || price < 50) fail(400, currency === 'mxn' ? 'Set a price of at least 10 MXN.' : 'Set a price of at least 0.50.');
     const capacity = Math.max(0, Math.min(100000, parseInt(b.capacity, 10) || 0));
-    const t = await env.DB.prepare('INSERT INTO gl_ticket_types (event_id, name, price, currency, capacity) VALUES (?, ?, ?, ?, ?) RETURNING *').bind(e.id, name, price, currency, capacity).first();
+    const access = String(b.access_code || '').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 30);
+    const t = await env.DB.prepare('INSERT INTO gl_ticket_types (event_id, name, price, currency, capacity, access_code) VALUES (?, ?, ?, ?, ?, ?) RETURNING *').bind(e.id, name, price, currency, capacity, access).first();
     return json({ type: typeShape(t, 0) });
   }
   if (seg[2] === 'tickets' && seg[3]) {
@@ -597,6 +602,13 @@ async function ticketsApi({ request, env, url, method, path, seg, org, person, l
 
 // One-off: events Daniel asked for while the site had no other way in. Each runs once (gl_meta), never again even if the event is deleted.
 async function seedOnce(env) {
+  if (!(await metaGet(env, 'seed_beach_family'))) {
+    await metaSet(env, 'seed_beach_family', new Date().toISOString());
+    if (await env.DB.prepare("SELECT 1 FROM gl_events WHERE id = 'beach2811'").first()) {
+      await env.DB.prepare("UPDATE gl_events SET alias = 'nov28' WHERE id = 'beach2811'").run();
+      await env.DB.prepare("INSERT INTO gl_ticket_types (event_id, name, price, currency, capacity, access_code) VALUES ('beach2811', 'Friends & Family', 20000, 'mxn', 24, 'family')").run();
+    }
+  }
   if (await metaGet(env, 'seed_beach_2026_11_28')) return;
   await metaSet(env, 'seed_beach_2026_11_28', new Date().toISOString());
   const o = await env.DB.prepare("SELECT id FROM gl_orgs WHERE handle = 'astradanza'").first();
@@ -1245,7 +1257,7 @@ async function api(request, env, url, ctx) {
       }
       const insider = (mine && mine.status === 'confirmed') || (org && org.id === e.org_id);
       const updates = (await env.DB.prepare(`SELECT * FROM gl_updates WHERE event_id = ? ${insider ? '' : 'AND guests_only = 0'} ORDER BY id DESC LIMIT 50`).bind(e.id).all()).results;
-      const tickets = ADMINS.has(e.org_handle) ? (await eventTickets(env, e)).filter((t) => t.active || e.tix_releases).map((t) => ({ ...t, sold: undefined, capacity: undefined })) : [];
+      const tickets = ADMINS.has(e.org_handle) ? (await eventTickets(env, e, url.searchParams.get('k'))).filter((t) => t.active || e.tix_releases).map((t) => ({ ...t, sold: undefined, capacity: undefined, access_code: undefined })) : [];
       return json({
         event: { ...shape, updates: updates.map(updateShape), tickets }, invite,
         mine: mine ? { name: mine.name, email: mine.email, plus: mine.plus, names: namesOf(mine), invite_code: mine.invite_code || '', status: mine.status, consent: !!mine.consent, ref: e.guest_invites ? refOf(mine) : '', has_account: !!person || !!(await env.DB.prepare('SELECT 1 FROM gl_people WHERE email = ?').bind(mine.email).first()) } : null,
@@ -1336,7 +1348,7 @@ async function api(request, env, url, ctx) {
   // An address: an event id or an organizer's handle
   // rsvp.fm/<handle>/<slug>: the event's readable address
   if (seg[0] === 'resolve' && seg[1] && seg[2] && method === 'GET') {
-    const r = await env.DB.prepare('SELECT e.id FROM gl_events e JOIN gl_orgs o ON o.id = e.org_id WHERE o.handle = ? AND e.slug = ?').bind(String(seg[1]).toLowerCase(), String(seg[2]).toLowerCase()).first();
+    const r = await env.DB.prepare("SELECT e.id FROM gl_events e JOIN gl_orgs o ON o.id = e.org_id WHERE o.handle = ?1 AND (e.slug = ?2 OR (e.alias != '' AND e.alias = ?2))").bind(String(seg[1]).toLowerCase(), String(seg[2]).toLowerCase()).first();
     if (!r) fail(404, 'This event does not exist.');
     return json({ type: 'event', id: r.id });
   }
@@ -1403,6 +1415,7 @@ function previewDate(s) {
 }
 async function previewFor(env, url) {
   const seg = url.pathname.split('/').filter(Boolean).map((x) => decodeURIComponent(x).toLowerCase());
+  if (seg.length === 3 && !RESERVED.has(seg[0])) seg.pop(); // rsvp.fm/<handle>/<event>/<secret word>: same preview as the event
   if (!seg.length || seg.length > 2) return null;
   await ensureSchema(env);
   const Q = 'SELECT e.*, o.name AS org_name, o.handle AS org_handle, o.logo AS org_logo FROM gl_events e JOIN gl_orgs o ON o.id = e.org_id';
@@ -1412,7 +1425,7 @@ async function previewFor(env, url) {
     const iv = await env.DB.prepare('SELECT event_id FROM gl_invites WHERE code = ?').bind(seg[1]).first();
     if (iv) e = await env.DB.prepare(Q + ' WHERE e.id = ?').bind(iv.event_id).first();
     else o = await env.DB.prepare("SELECT * FROM gl_orgs WHERE invite_token = ?").bind(seg[1]).first();
-  } else if (seg.length === 2) e = await env.DB.prepare(Q + ' WHERE o.handle = ? AND e.slug = ?').bind(seg[0], seg[1]).first();
+  } else if (seg.length === 2) e = await env.DB.prepare(Q + " WHERE o.handle = ?1 AND (e.slug = ?2 OR (e.alias != '' AND e.alias = ?2))").bind(seg[0], seg[1]).first();
   else if (!RESERVED.has(seg[0])) {
     o = await env.DB.prepare('SELECT * FROM gl_orgs WHERE handle = ?').bind(seg[0]).first();
     if (!o) e = await env.DB.prepare(Q + ' WHERE e.id = ?').bind(seg[0]).first();

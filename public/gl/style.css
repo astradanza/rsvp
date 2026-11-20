@@ -321,3 +321,19 @@ form.f-comment{display:flex;flex-direction:row;gap:10px;align-items:flex-end;fle
 .scan-res.used{background:#b07a00;border-color:#b07a00;color:#fff}
 .scan-res.bad{background:#a3201a;border-color:#a3201a;color:#fff}
 .tix-opt.off{opacity:.45}
+
+/* secret-link tickets (friends & family) */
+.tix-special{display:flex;flex-direction:column;gap:6px;padding:16px 16px 14px;border:1px solid #FFD400;background:rgba(255,212,0,.08);cursor:pointer;position:relative}
+.tix-special input{position:absolute;opacity:0;pointer-events:none}
+.tix-special:has(input:checked){background:#FFD400;color:#000}
+.tix-special .ts-kicker{font-family:var(--text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#FFD400}
+.tix-special:has(input:checked) .ts-kicker{color:#000}
+.tix-special .ts-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.tix-special b{font:700 22px/1.1 var(--display);letter-spacing:-.02em}
+.tix-special .ts-price{font-family:var(--text);font-size:16px}
+.tix-special .ts-left{font-family:var(--text);font-size:12px;letter-spacing:.06em}
+.tix-special.off{opacity:.5;cursor:default}
+.tix-special{text-align:left;color:var(--ink)}
+.tix-special b,.tix-special .ts-price,.tix-special .ts-left{color:inherit}
+.tix-special:has(input:checked){color:#000}
+.tix-special:has(input:checked) b,.tix-special:has(input:checked) .ts-price,.tix-special:has(input:checked) .ts-left{color:#000}

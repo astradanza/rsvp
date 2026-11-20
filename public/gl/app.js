@@ -222,7 +222,8 @@
       if (j.types.length) {
         h += '<div class="stats"><div class="stat"><b>' + j.tickets + '</b><span>Sold</span></div><div class="stat"><b>' + j.checked_in + '</b><span>Checked in</span></div><div class="stat"><b style="font-size:20px">' + esc(j.revenue || '0') + '</b><span>Revenue</span></div></div>';
         h += '<div class="list">' + j.types.map(function (t) {
-          return '<div class="item"><span class="main"><span class="t">' + esc(t.name) + ' · ' + esc(t.label) + '</span><span class="m">' + t.sold + (t.capacity ? ' / ' + t.capacity : '') + ' sold' + (t.active ? '' : ' · sale stopped') + (t.release === 'current' ? ' · on sale now' : t.release === 'next' ? ' · next' : '') + '</span></span>' +
+          return '<div class="item"><span class="main"><span class="t">' + esc(t.name) + ' · ' + esc(t.label) + '</span>' +
+            (t.access_code ? '<span class="m">Secret link: ' + esc(location.host + eventPath(current.event, org.handle) + '/' + t.access_code) + '</span>' : '') + '<span class="m">' + t.sold + (t.capacity ? ' / ' + t.capacity : '') + ' sold' + (t.active ? '' : ' · sale stopped') + (t.release === 'current' ? ' · on sale now' : t.release === 'next' ? ' · next' : '') + '</span></span>' +
             '<span class="s"><button class="link small" data-act="tixactive" data-id="' + t.id + '" data-on="' + (t.active ? 1 : 0) + '">' + (t.active ? 'Stop sale' : 'Resume sale') + '</button>' +
             (t.sold ? '' : ' <button class="link small" data-act="tixdel" data-id="' + t.id + '">Delete</button>') + '</span></div>' +
             '<form class="tixcap stack" data-id="' + t.id + '" id="f-tixcap-' + t.id + '" style="gap:8px"><div class="row2">' +
@@ -237,6 +238,7 @@
         '<div class="row2"><label><span>Price</span><input name="price" inputmode="decimal" placeholder="300" required></label>' +
         '<label><span>Currency</span><select name="currency"><option value="mxn">MXN</option><option value="eur">EUR</option><option value="usd">USD</option><option value="gbp">GBP</option></select></label></div>' +
         '<label><span>How many (leave empty for no limit)</span><input name="capacity" inputmode="numeric" placeholder="100"></label>' +
+        '<label><span>Secret word (optional)</span><input name="access_code" maxlength="30" placeholder="family" autocapitalize="none"><small class="quiet">Only people with the link ending in /this-word see this ticket.</small></label>' +
         '<p class="err" hidden></p><div class="acts"><button class="btn small" type="submit">Add the ticket</button></div></form>';
       if (j.orders.length) h += '<div class="stack"><span class="sc" style="font-size:13px">Sales</span><div class="list">' + j.orders.map(function (o) {
         return '<div class="item"><span class="main"><span class="t">' + esc(o.name) + ' × ' + o.qty + '</span><span class="m">' + esc(o.email) + ' · ' + esc(o.amount) + ' · ' + esc(ago(o.paid_at || o.created_at)) + '</span></span></div>';
@@ -246,10 +248,18 @@
   }
   function buyBox(e) {
     var rel = e.tickets.some(function (t) { return t.release; });
-    var on = e.tickets.filter(function (t) { return rel ? t.release === 'current' : t.left !== 0; });
+    var sp = e.tickets.filter(function (t) { return t.special && t.active && t.left !== 0 && !t.ended; });
+    var on = sp.concat(e.tickets.filter(function (t) { return !t.special && (rel ? t.release === 'current' : t.left !== 0); }));
     var h = '<div class="card" id="buy"><p class="sc">Tickets</p>';
     if (!on.length) return h + '<h2>Sold out.</h2></div>';
-    h += '<form id="f-buy" data-id="' + esc(e.id) + '" class="stack">' + e.tickets.map(function (t, i) {
+    // Secret-link tickets (friends & family): set apart, on top, and chosen first
+    h += '<form id="f-buy" data-id="' + esc(e.id) + '" class="stack">' + e.tickets.filter(function (t) { return t.special; }).map(function (t) {
+      var off = !t.active || t.left === 0 || t.ended;
+      return '<label class="tix-special' + (off ? ' off' : '') + '"><input type="radio" name="type_id" value="' + t.id + '"' + (off ? ' disabled' : t === on[0] ? ' checked' : '') + '>' +
+        '<span class="ts-kicker">You\'ve been invited to access the ' + esc(t.name) + ' tickets</span>' +
+        '<span class="ts-row"><b>' + esc(t.name) + '</b><span class="ts-price">' + esc(t.label) + '</span></span>' +
+        '<span class="ts-left">' + (off ? (t.left === 0 ? 'Sold out' : 'Closed') : t.left !== null ? t.left + ' ticket' + (t.left === 1 ? '' : 's') + ' remaining' : '') + '</span></label>';
+    }).join('') + e.tickets.filter(function (t) { return !t.special; }).map(function (t, i) {
       var off = rel ? t.release !== 'current' : (t.left === 0 || t.ended);
       var left = t.left !== null && t.left !== 0 ? t.left + ' left' : '';
       var ends = ''; // the end of a sale is not shown to buyers (it still closes the ticket on time)
@@ -774,7 +784,8 @@
     loading();
     var t = tokenFor(id), inv = inviteFor(id);
     var via0 = new URLSearchParams(location.search).get('via'); if (via0) { try { sessionStorage.setItem('via:' + id, via0); } catch (e) {} }
-    var qs = [t ? 't=' + encodeURIComponent(t) : '', inv ? 'inv=' + encodeURIComponent(inv) : ''].filter(Boolean).join('&');
+    var key = ''; try { key = sessionStorage.getItem('k:' + id) || ''; } catch (e) {}
+    var qs = [t ? 't=' + encodeURIComponent(t) : '', inv ? 'inv=' + encodeURIComponent(inv) : '', key ? 'k=' + encodeURIComponent(key) : ''].filter(Boolean).join('&');
     api('GET', '/p/' + id + (qs ? '?' + qs : '')).then(function (j) {
       var e = j.event, host = e.host, h = '<div class="stack lg">';
       header('guest'); theme(host.theme, host.custom);
@@ -1196,6 +1207,7 @@
     } else if (f.id === 'f-tixtype') {
       api('POST', '/events/' + current.event.id + '/tickets', d).then(function () { say('Ticket added. It is on sale on your event page.'); loadTix(); }).catch(fail);
     } else if (f.id === 'f-buy') {
+      try { d.k = sessionStorage.getItem('k:' + f.getAttribute('data-id')) || undefined; } catch (e) {}
       api('POST', '/p/' + f.getAttribute('data-id') + '/checkout', d).then(function (r) { location.href = r.url; }).catch(fail);
     } else if (f.id === 'f-scan') {
       if (d.code) checkTicket(scanState.event, d.code); f.reset(); btn.disabled = false;
@@ -1263,9 +1275,10 @@
     if ((m = /^\/e\/([a-z0-9]{4,16})\/edit$/.exec(p))) return viewEdit(m[1]);
     if ((m = /^\/e\/([a-z0-9]{4,16})\/scan$/.exec(p))) return viewScan(m[1]);
     if ((m = /^\/tickets\/([A-Za-z0-9_-]{20,64})$/.exec(p))) return viewTickets(m[1]);
-    if ((m = /^\/([a-z0-9][a-z0-9_-]{1,29})\/([a-z0-9][a-z0-9-]{0,59})$/i.exec(p)) && m[1] !== 'e' && m[1] !== 'i') {
+    if ((m = /^\/([a-z0-9][a-z0-9_-]{1,29})\/([a-z0-9][a-z0-9-]{0,59})(?:\/([a-z0-9][a-z0-9-]{0,29}))?$/i.exec(p)) && m[1] !== 'e' && m[1] !== 'i') {
       loading();
-      return api('GET', '/resolve/' + m[1].toLowerCase() + '/' + m[2].toLowerCase()).then(function (r) { viewGuest(r.id); })
+      var secret = m[3] ? m[3].toLowerCase() : '';
+      return api('GET', '/resolve/' + m[1].toLowerCase() + '/' + m[2].toLowerCase()).then(function (r) { if (secret) { try { sessionStorage.setItem('k:' + r.id, secret); } catch (e) {} } viewGuest(r.id); })
         .catch(function (e) { header('guest'); showError(e); });
     }
     if ((m = /^\/([a-z0-9][a-z0-9_-]{1,29})$/i.exec(p))) {
