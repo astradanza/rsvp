@@ -212,13 +212,15 @@
       if (j.stripe.connected && !loadTix.linked) { loadTix.linked = true; api('POST', '/tix/connect', {}).catch(function (e) { say(e.message); }); }
       var st = j.stripe.connected ? (j.stripe.mode === 'live' ? '' : '<p class="small"><span class="tag">test mode</span> Payments are simulated: use the card 4242 4242 4242 4242.</p>') :
         '<p class="small"><span class="tag">not connected</span> Add your Stripe secret key to the Worker to sell (see the setup notes).</p>';
-      var h = '<div class="box"><span class="sc">Tickets <span class="tag">beta</span></span>' + st;
+      var h = '<div class="box"><span class="sc">Tickets <span class="tag">beta</span></span>' + st +
+        '<label class="check"><input type="checkbox" data-act="tixreleases"' + (j.releases ? ' checked' : '') + '><span>Sell in releases<small>One ticket on sale at a time, in this order. The next opens when one sells out or you stop it.</small></span></label>';
       if (j.types.length) {
         h += '<div class="stats"><div class="stat"><b>' + j.tickets + '</b><span>Sold</span></div><div class="stat"><b>' + j.checked_in + '</b><span>Checked in</span></div><div class="stat"><b style="font-size:20px">' + esc(j.revenue || '0') + '</b><span>Revenue</span></div></div>';
         h += '<div class="list">' + j.types.map(function (t) {
-          return '<div class="item"><span class="main"><span class="t">' + esc(t.name) + ' · ' + esc(t.label) + '</span><span class="m">' + t.sold + (t.capacity ? ' / ' + t.capacity : '') + ' sold' + (t.active ? '' : ' · sale stopped') + '</span></span>' +
+          return '<div class="item"><span class="main"><span class="t">' + esc(t.name) + ' · ' + esc(t.label) + '</span><span class="m">' + t.sold + (t.capacity ? ' / ' + t.capacity : '') + ' sold' + (t.active ? '' : ' · sale stopped') + (t.release === 'current' ? ' · on sale now' : t.release === 'next' ? ' · next' : '') + '</span></span>' +
             '<span class="s"><button class="link small" data-act="tixactive" data-id="' + t.id + '" data-on="' + (t.active ? 1 : 0) + '">' + (t.active ? 'Stop sale' : 'Resume sale') + '</button>' +
-            (t.sold ? '' : ' <button class="link small" data-act="tixdel" data-id="' + t.id + '">Delete</button>') + '</span></div>';
+            (t.sold ? '' : ' <button class="link small" data-act="tixdel" data-id="' + t.id + '">Delete</button>') + '</span></div>' +
+            '<form class="tixcap copyfield" data-id="' + t.id + '" id="f-tixcap-' + t.id + '"><input name="capacity" inputmode="numeric" placeholder="How many (no limit)" value="' + (t.capacity || '') + '" style="font-size:14px"><button class="btn small line" type="submit">Set limit</button></form>';
         }).join('') + '</div>';
         h += '<div class="acts small"><a class="btn small" href="/e/' + esc(current.event.id) + '/scan">Scan tickets at the door</a></div>';
       }
@@ -235,12 +237,16 @@
     }).catch(function (e) { slot.innerHTML = '<p class="err small">' + esc(e.message) + '</p>'; });
   }
   function buyBox(e) {
-    var on = e.tickets.filter(function (t) { return t.left !== 0; });
+    var rel = e.tickets.some(function (t) { return t.release; });
+    var on = e.tickets.filter(function (t) { return rel ? t.release === 'current' : t.left !== 0; });
     var h = '<div class="card" id="buy"><p class="sc">Tickets</p>';
     if (!on.length) return h + '<h2>Sold out.</h2></div>';
     h += '<form id="f-buy" data-id="' + esc(e.id) + '" class="stack">' + e.tickets.map(function (t, i) {
-      return '<label class="check tix-opt"><input type="radio" name="type_id" value="' + t.id + '"' + (t.left === 0 ? ' disabled' : i === e.tickets.indexOf(on[0]) ? ' checked' : '') + '>' +
-        '<span><b>' + esc(t.name) + '</b> · ' + esc(t.label) + (t.left === 0 ? '<small>Sold out</small>' : t.left !== null && t.left <= 20 ? '<small>' + t.left + ' left</small>' : '') + '</span></label>';
+      var off = rel ? t.release !== 'current' : t.left === 0;
+      var note = rel ? (t.release === 'past' ? 'Sold out' : t.release === 'next' ? 'Next' : t.left !== null && t.left <= 20 ? t.left + ' left' : 'On sale now') :
+        t.left === 0 ? 'Sold out' : t.left !== null && t.left <= 20 ? t.left + ' left' : '';
+      return '<label class="check tix-opt' + (off ? ' off' : '') + '"><input type="radio" name="type_id" value="' + t.id + '"' + (off ? ' disabled' : t === on[0] ? ' checked' : '') + '>' +
+        '<span><b>' + esc(t.name) + '</b> · ' + esc(t.label) + (note ? '<small>' + note + '</small>' : '') + '</span></label>';
     }).join('') +
       '<label><span>How many</span><select name="qty">' + [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(function (n) { return '<option>' + n + '</option>'; }).join('') + '</select></label>' +
       '<label><span>Full name</span><input name="name" required autocomplete="name" value="' + esc(person ? person.name : '') + '"></label>' +
@@ -763,6 +769,7 @@
       if (j.invite && !j.invite.mine && j.invite.used) h += '<div class="card"><p class="sc">Invitation</p><h2>This link has already been used.</h2><p class="quiet small">Ask ' + esc(host.name) + ' for a new one.</p></div>';
       else if (j.invite && !(j.mine && j.mine.invite_code === j.invite.code)) h += inviteForm(e, j.invite, person || j.mine || {});
       else if (j.mine) h += statusCard(e, j.mine, id) + inviteFriends(e, j.mine) + afterRsvp(e, j.mine, id);
+      else if (e.tickets && e.tickets.length) { /* a ticketed event: the tickets are the way in */ }
       else if (!e.open) h += '<div class="card"><h2>The guestlist is closed.</h2><p class="quiet">Thank you for your interest.</p></div>';
       else h += rsvpForm(e, person || {});
       main.innerHTML = h + '</div>';
@@ -1010,6 +1017,7 @@
     if (act === 'rmphoto') { setFormPhotos(formPhotos().filter(function (u) { return u !== id; })); return; }
     if (act === 'coverphoto') { var pl = formPhotos().filter(function (u) { return u !== id; }); pl.unshift(id); setFormPhotos(pl); return; }
     if (act === 'accounts') { accountsMenu(); return; }
+    if (act === 'tixreleases') { api('PATCH', '/events/' + current.event.id + '/tickets/releases', { on: b.checked }).then(loadTix).catch(function (e) { say(e.message); }); return; }
     if (act === 'tixactive') { api('PATCH', '/events/' + current.event.id + '/tickets/' + id, { active: b.getAttribute('data-on') !== '1' }).then(loadTix).catch(function (e) { say(e.message); }); return; }
     if (act === 'tixdel') { api('DELETE', '/events/' + current.event.id + '/tickets/' + id).then(loadTix).catch(function (e) { say(e.message); }); return; }
     if (act === 'postcomments') {
@@ -1158,6 +1166,8 @@
       api('POST', '/people/signup', { event: pid, t: tokenFor(pid), password: d.password }).then(function (j) {
         person = j.person; say('Done. Your next invitations will be waiting here.'); viewGuest(pid);
       }).catch(fail);
+    } else if (/^f-tixcap-/.test(f.id)) {
+      api('PATCH', '/events/' + current.event.id + '/tickets/' + f.getAttribute('data-id'), { capacity: d.capacity || 0 }).then(function () { say(d.capacity ? 'Limit set: ' + d.capacity + ' tickets.' : 'No limit.'); loadTix(); }).catch(fail);
     } else if (f.id === 'f-tixtype') {
       api('POST', '/events/' + current.event.id + '/tickets', d).then(function () { say('Ticket added. It is on sale on your event page.'); loadTix(); }).catch(fail);
     } else if (f.id === 'f-buy') {

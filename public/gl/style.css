@@ -320,3 +320,4 @@ form.f-comment{display:flex;flex-direction:row;gap:10px;align-items:flex-end;fle
 .scan-res.ok{background:#0f7a3a;border-color:#0f7a3a;color:#fff}
 .scan-res.used{background:#b07a00;border-color:#b07a00;color:#fff}
 .scan-res.bad{background:#a3201a;border-color:#a3201a;color:#fff}
+.tix-opt.off{opacity:.45}
