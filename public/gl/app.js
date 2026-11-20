@@ -208,6 +208,8 @@
     var slot = document.getElementById('tix-slot'); if (!slot) return;
     api('GET', '/events/' + current.event.id + '/tickets').then(function (j) {
       current.tix = j;
+      // First time with a Stripe key: create the webhook that confirms payments (once per mode)
+      if (j.stripe.connected && !loadTix.linked) { loadTix.linked = true; api('POST', '/tix/connect', {}).catch(function (e) { say(e.message); }); }
       var st = j.stripe.connected ? (j.stripe.mode === 'live' ? '' : '<p class="small"><span class="tag">test mode</span> Payments are simulated: use the card 4242 4242 4242 4242.</p>') :
         '<p class="small"><span class="tag">not connected</span> Add your Stripe secret key to the Worker to sell (see the setup notes).</p>';
       var h = '<div class="box"><span class="sc">Tickets <span class="tag">beta</span></span>' + st;
