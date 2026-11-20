@@ -255,10 +255,12 @@
     // Secret-link tickets (friends & family): set apart, on top, and chosen first
     h += '<form id="f-buy" data-id="' + esc(e.id) + '" class="stack">' + e.tickets.filter(function (t) { return t.special; }).map(function (t) {
       var off = !t.active || t.left === 0 || t.ended;
+      // A ticket stub: the invitation on the left, the price and what's left after the perforation
       return '<label class="tix-special' + (off ? ' off' : '') + '"><input type="radio" name="type_id" value="' + t.id + '"' + (off ? ' disabled' : t === on[0] ? ' checked' : '') + '>' +
-        '<span class="ts-kicker">You\'ve been invited to access the ' + esc(t.name) + ' tickets</span>' +
-        '<span class="ts-row"><b>' + esc(t.name) + '</b><span class="ts-price">' + esc(t.label) + '</span></span>' +
-        '<span class="ts-left">' + (off ? (t.left === 0 ? 'Sold out' : 'Closed') : t.left !== null ? t.left + ' ticket' + (t.left === 1 ? '' : 's') + ' remaining' : '') + '</span></label>';
+        '<span class="ts-main"><span class="ts-kicker">Invitation only</span><b>' + esc(t.name) + '</b>' +
+        '<span class="ts-note">You\'ve been invited to access these tickets</span></span>' +
+        '<span class="ts-stub"><span class="ts-price">' + esc(t.label.replace(/\.00$/, '')) + '</span>' +
+        '<span class="ts-left">' + (off ? (t.left === 0 ? 'Sold out' : 'Closed') : t.left !== null ? t.left + ' left' : '') + '</span></span></label>';
     }).join('') + e.tickets.filter(function (t) { return !t.special; }).map(function (t, i) {
       var off = rel ? t.release !== 'current' : (t.left === 0 || t.ended);
       var left = t.left !== null && t.left !== 0 ? t.left + ' left' : '';

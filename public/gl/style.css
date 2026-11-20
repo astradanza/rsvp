@@ -322,18 +322,15 @@ form.f-comment{display:flex;flex-direction:row;gap:10px;align-items:flex-end;fle
 .scan-res.bad{background:#a3201a;border-color:#a3201a;color:#fff}
 .tix-opt.off{opacity:.45}
 
-/* secret-link tickets (friends & family) */
-.tix-special{display:flex;flex-direction:column;gap:6px;padding:16px 16px 14px;border:1px solid #FFD400;background:rgba(255,212,0,.08);cursor:pointer;position:relative}
+/* secret-link tickets (friends & family): a yellow ticket stub with a perforation */
+.tix-special{display:flex;align-items:stretch;background:#FFD400;color:#000;cursor:pointer;position:relative;text-align:left;outline:2px solid transparent;outline-offset:3px;transition:outline-color .15s,opacity .15s;opacity:.82}
 .tix-special input{position:absolute;opacity:0;pointer-events:none}
-.tix-special:has(input:checked){background:#FFD400;color:#000}
-.tix-special .ts-kicker{font-family:var(--text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#FFD400}
-.tix-special:has(input:checked) .ts-kicker{color:#000}
-.tix-special .ts-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
-.tix-special b{font:700 22px/1.1 var(--display);letter-spacing:-.02em}
-.tix-special .ts-price{font-family:var(--text);font-size:16px}
-.tix-special .ts-left{font-family:var(--text);font-size:12px;letter-spacing:.06em}
-.tix-special.off{opacity:.5;cursor:default}
-.tix-special{text-align:left;color:var(--ink)}
-.tix-special b,.tix-special .ts-price,.tix-special .ts-left{color:inherit}
-.tix-special:has(input:checked){color:#000}
-.tix-special:has(input:checked) b,.tix-special:has(input:checked) .ts-price,.tix-special:has(input:checked) .ts-left{color:#000}
+.tix-special:has(input:checked){opacity:1;outline-color:#FFD400}
+.tix-special .ts-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;padding:16px;border-right:2px dashed #000}
+.tix-special .ts-kicker{font-family:var(--text);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#000}
+.tix-special b{font:700 22px/1.1 var(--display);letter-spacing:-.02em;color:#000}
+.tix-special .ts-note{font-size:13px;line-height:1.35;color:#000}
+.tix-special .ts-stub{width:96px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:12px 8px;color:#000}
+.tix-special .ts-price{font:700 16px/1 var(--text);color:#000;white-space:nowrap}
+.tix-special .ts-left{font-family:var(--text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#000}
+.tix-special.off{opacity:.45;cursor:default}
