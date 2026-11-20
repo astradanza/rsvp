@@ -334,3 +334,8 @@ form.f-comment{display:flex;flex-direction:row;gap:10px;align-items:flex-end;fle
 .tix-special .ts-price{font:700 16px/1 var(--text);color:#000;white-space:nowrap}
 .tix-special .ts-left{font-family:var(--text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#000}
 .tix-special.off{opacity:.45;cursor:default}
+/* the stub is a label: undo the form label look (column, small caps) */
+label.tix-special{flex-direction:row;gap:0}
+body[data-theme] label.tix-special>span.ts-main,body[data-theme] label.tix-special>span.ts-stub{font:inherit;letter-spacing:0;text-transform:none;color:#000}
+.tix-special .ts-note{font-family:var(--display);font-weight:400;text-transform:none;letter-spacing:0}
+.tix-special b{text-transform:none}
