@@ -252,7 +252,7 @@
     h += '<form id="f-buy" data-id="' + esc(e.id) + '" class="stack">' + e.tickets.map(function (t, i) {
       var off = rel ? t.release !== 'current' : (t.left === 0 || t.ended);
       var left = t.left !== null && t.left !== 0 ? t.left + ' left' : '';
-      var ends = t.sale_ends && !t.ended ? '<span class="countdown" data-until="' + esc(t.sale_ends) + '"></span>' : '';
+      var ends = ''; // the end of a sale is not shown to buyers (it still closes the ticket on time)
       var note = rel ? (t.release === 'past' ? (t.ended && t.left !== 0 ? 'Closed' : 'Sold out') : t.release === 'next' ? left || 'Next' : [left || 'On sale now', ends].filter(Boolean).join(' · ')) :
         t.left === 0 ? 'Sold out' : t.ended ? 'Closed' : [left, ends].filter(Boolean).join(' · ');
       return '<label class="check tix-opt' + (off ? ' off' : '') + '"><input type="radio" name="type_id" value="' + t.id + '"' + (off ? ' disabled' : t === on[0] ? ' checked' : '') + '>' +
