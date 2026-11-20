@@ -171,6 +171,7 @@ async function ensureSchema(env) {
   await addColumns(env, 'gl_guests', [['consent', 'INTEGER NOT NULL DEFAULT 0'], ['names', "TEXT NOT NULL DEFAULT ''"], ['invite_code', 'TEXT'], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['via', 'INTEGER']]);
   await addColumns(env, 'gl_events', [['listed', 'INTEGER NOT NULL DEFAULT 1'], ['slug', 'TEXT'], ['photos', "TEXT NOT NULL DEFAULT '[]'"],
     ['msg_subject', "TEXT NOT NULL DEFAULT ''"], ['msg_text', "TEXT NOT NULL DEFAULT ''"], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['msg_auto', 'INTEGER NOT NULL DEFAULT 0'], ['msg_photo', "TEXT NOT NULL DEFAULT ''"], ['guest_invites', 'INTEGER NOT NULL DEFAULT 1'], ['tix_releases', 'INTEGER NOT NULL DEFAULT 0']]);
+  await addColumns(env, 'gl_ticket_types', [['sale_ends', "TEXT NOT NULL DEFAULT ''"]]);
   await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS gl_orgs_handle ON gl_orgs(handle)').run();
   // guests who RSVP'd before communities existed join their organizer's community (no email consent)
   if (!(await env.DB.prepare('SELECT 1 FROM gl_contacts LIMIT 1').first())) {
@@ -411,8 +412,10 @@ async function stripe(env, method, path, params) {
 async function metaGet(env, key) { const r = await env.DB.prepare('SELECT value FROM gl_meta WHERE key = ?').bind(key).first(); return r ? r.value : ''; }
 async function metaSet(env, key, value) { await env.DB.prepare('INSERT INTO gl_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(key, value).run(); }
 const tixCode = () => code(10).toUpperCase();
+// sale_ends: an ISO time (UTC) after which this ticket is no longer sold, '' for none
 const typeShape = (t, sold) => ({ id: t.id, name: t.name, price: t.price, currency: t.currency, capacity: t.capacity, active: !!t.active, sold: sold || 0,
-  left: t.capacity ? Math.max(0, t.capacity - (sold || 0)) : null, label: money(t.price, t.currency) });
+  left: t.capacity ? Math.max(0, t.capacity - (sold || 0)) : null, label: money(t.price, t.currency),
+  sale_ends: t.sale_ends || '', ended: !!t.sale_ends && Date.parse(t.sale_ends) <= Date.now() });
 // Sold = paid tickets, plus orders still being paid (30 minutes) so the last tickets are not sold twice
 async function soldByType(env, eventId) {
   const rows = (await env.DB.prepare(`SELECT type_id, SUM(qty) AS n FROM gl_orders WHERE event_id = ? AND (status = 'paid' OR (status = 'pending' AND created_at > datetime('now', '-35 minutes'))) GROUP BY type_id`).bind(eventId).all()).results;
@@ -425,7 +428,7 @@ async function eventTickets(env, e) {
   const list = types.map((t) => typeShape(t, sold[t.id]));
   // Releases (first release, second, third…): one on sale at a time, the next opens when the one before sells out or is stopped
   if (e.tix_releases) {
-    const cur = list.find((t) => t.active && t.left !== 0);
+    const cur = list.find((t) => t.active && t.left !== 0 && !t.ended);
     let seen = false;
     list.forEach((t) => { t.release = t === cur ? 'current' : seen ? 'next' : 'past'; if (t === cur) seen = true; });
   }
@@ -499,6 +502,7 @@ async function ticketsApi({ request, env, url, method, path, seg, org, person, l
     if (!EMAIL_RE.test(email)) fail(400, 'Enter a valid email address: your tickets go there.');
     const t = await env.DB.prepare('SELECT * FROM gl_ticket_types WHERE id = ? AND event_id = ? AND active = 1').bind(Number(b.type_id), e.id).first();
     if (!t) fail(404, 'This ticket is not on sale.');
+    if (t.sale_ends && Date.parse(t.sale_ends) <= Date.now()) fail(409, 'Sales for this ticket have ended.');
     if (e.tix_releases) { const cur = (await eventTickets(env, e)).find((x) => x.release === 'current'); if (!cur || cur.id !== t.id) fail(409, 'This release is not on sale. Reload the page.'); }
     if (t.capacity) { const sold = (await soldByType(env, e.id))[t.id] || 0; if (sold + qty > t.capacity) fail(409, t.capacity - sold > 0 ? `Only ${t.capacity - sold} left.` : 'Sold out.'); }
     const tk = token();
@@ -568,6 +572,7 @@ async function ticketsApi({ request, env, url, method, path, seg, org, person, l
       const b = await body(request);
       if ('capacity' in b) await env.DB.prepare('UPDATE gl_ticket_types SET capacity = ? WHERE id = ?').bind(Math.max(0, Math.min(100000, parseInt(b.capacity, 10) || 0)), t.id).run();
       if ('active' in b) await env.DB.prepare('UPDATE gl_ticket_types SET active = ? WHERE id = ?').bind(b.active ? 1 : 0, t.id).run();
+      if ('sale_ends' in b) { const d = b.sale_ends ? new Date(b.sale_ends) : null; await env.DB.prepare('UPDATE gl_ticket_types SET sale_ends = ? WHERE id = ?').bind(d && !isNaN(d) ? d.toISOString() : '', t.id).run(); }
       return json({ ok: true });
     }
     if (method === 'DELETE') {

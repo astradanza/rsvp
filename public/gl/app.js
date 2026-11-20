@@ -204,6 +204,11 @@
       var sc = document.createElement('script'); sc.src = src; sc.onload = ok; sc.onerror = function () { ko(new Error('Could not load ' + src)); }; document.head.appendChild(sc);
     });
   }
+  function localInput(iso) {
+    if (!iso) return ''; var d = new Date(iso); if (isNaN(d)) return '';
+    var p2 = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + 'T' + p2(d.getHours()) + ':' + p2(d.getMinutes());
+  }
   function loadTix() {
     var slot = document.getElementById('tix-slot'); if (!slot) return;
     api('GET', '/events/' + current.event.id + '/tickets').then(function (j) {
@@ -220,7 +225,10 @@
           return '<div class="item"><span class="main"><span class="t">' + esc(t.name) + ' · ' + esc(t.label) + '</span><span class="m">' + t.sold + (t.capacity ? ' / ' + t.capacity : '') + ' sold' + (t.active ? '' : ' · sale stopped') + (t.release === 'current' ? ' · on sale now' : t.release === 'next' ? ' · next' : '') + '</span></span>' +
             '<span class="s"><button class="link small" data-act="tixactive" data-id="' + t.id + '" data-on="' + (t.active ? 1 : 0) + '">' + (t.active ? 'Stop sale' : 'Resume sale') + '</button>' +
             (t.sold ? '' : ' <button class="link small" data-act="tixdel" data-id="' + t.id + '">Delete</button>') + '</span></div>' +
-            '<form class="tixcap copyfield" data-id="' + t.id + '" id="f-tixcap-' + t.id + '"><input name="capacity" inputmode="numeric" placeholder="How many (no limit)" value="' + (t.capacity || '') + '" style="font-size:14px"><button class="btn small line" type="submit">Set limit</button></form>';
+            '<form class="tixcap stack" data-id="' + t.id + '" id="f-tixcap-' + t.id + '" style="gap:8px"><div class="row2">' +
+            '<label><span>How many</span><input name="capacity" inputmode="numeric" placeholder="No limit" value="' + (t.capacity || '') + '" style="font-size:14px"></label>' +
+            '<label><span>Sale ends</span><input name="sale_ends" type="datetime-local" value="' + esc(localInput(t.sale_ends)) + '" style="font-size:14px"></label></div>' +
+            '<div class="acts small"><button class="btn small line" type="submit">Save</button>' + (t.ended ? '<span class="quiet small">Sale ended</span>' : '') + '</div></form>';
         }).join('') + '</div>';
         h += '<div class="acts small"><a class="btn small" href="/e/' + esc(current.event.id) + '/scan">Scan tickets at the door</a></div>';
       }
@@ -242,9 +250,11 @@
     var h = '<div class="card" id="buy"><p class="sc">Tickets</p>';
     if (!on.length) return h + '<h2>Sold out.</h2></div>';
     h += '<form id="f-buy" data-id="' + esc(e.id) + '" class="stack">' + e.tickets.map(function (t, i) {
-      var off = rel ? t.release !== 'current' : t.left === 0;
-      var note = rel ? (t.release === 'past' ? 'Sold out' : t.release === 'next' ? 'Next' : t.left !== null && t.left <= 20 ? t.left + ' left' : 'On sale now') :
-        t.left === 0 ? 'Sold out' : t.left !== null && t.left <= 20 ? t.left + ' left' : '';
+      var off = rel ? t.release !== 'current' : (t.left === 0 || t.ended);
+      var left = t.left !== null && t.left !== 0 ? t.left + ' left' : '';
+      var ends = t.sale_ends && !t.ended ? '<span class="countdown" data-until="' + esc(t.sale_ends) + '"></span>' : '';
+      var note = rel ? (t.release === 'past' ? (t.ended && t.left !== 0 ? 'Closed' : 'Sold out') : t.release === 'next' ? left || 'Next' : [left || 'On sale now', ends].filter(Boolean).join(' · ')) :
+        t.left === 0 ? 'Sold out' : t.ended ? 'Closed' : [left, ends].filter(Boolean).join(' · ');
       return '<label class="check tix-opt' + (off ? ' off' : '') + '"><input type="radio" name="type_id" value="' + t.id + '"' + (off ? ' disabled' : t === on[0] ? ' checked' : '') + '>' +
         '<span><b>' + esc(t.name) + '</b> · ' + esc(t.label) + (note ? '<small>' + note + '</small>' : '') + '</span></label>';
     }).join('') +
@@ -254,6 +264,21 @@
       '<p class="err" hidden></p><button class="btn wide" type="submit">Pay · Apple Pay or card</button>' +
       '<p class="quiet small center">Secure payment by Stripe. One QR code per ticket.</p></form></div>';
     return h;
+  }
+  // "ends in 2d 4h" next to a ticket whose sale has an end; the page reloads the tickets when it is reached
+  function tickCountdowns() {
+    var els = document.querySelectorAll('.countdown[data-until]'); if (!els.length) return;
+    var reload = false;
+    els.forEach(function (el) {
+      var ms = Date.parse(el.getAttribute('data-until')) - Date.now();
+      if (ms <= 0) { el.textContent = 'ended'; reload = true; return; }
+      var m = Math.floor(ms / 60000), d = Math.floor(m / 1440), hh = Math.floor((m % 1440) / 60), mm = m % 60, ss = Math.floor(ms / 1000) % 60;
+      el.textContent = 'ends in ' + (d ? d + 'd ' + hh + 'h ' + mm + 'm' : hh ? hh + 'h ' + mm + 'm ' + ss + 's' : mm + 'm ' + ss + 's');
+    });
+    clearTimeout(tickCountdowns.t);
+    if (reload && !tickCountdowns.reloaded) { tickCountdowns.reloaded = true; tickCountdowns.t = setTimeout(route, 2500); return; }
+    if (reload) return;
+    tickCountdowns.t = setTimeout(tickCountdowns, 1000);
   }
   function viewTickets(tk) {
     header('guest'); loading();
@@ -765,7 +790,7 @@
       if (e.details) h += '<p class="details">' + linkify(e.details) + '</p>';
       if (ph.length > 1) h += '<div class="gallery">' + ph.slice(1).map(function (u) { return '<a href="' + esc(u) + '" target="_blank" rel="noopener"><img src="' + esc(u) + '" alt="" loading="lazy"></a>'; }).join('') + '</div>';
       if (e.details || ph.length > 1) h += '<hr class="rule">';
-      if (e.tickets && e.tickets.length) h += buyBox(e);
+      if (e.tickets && e.tickets.length) { h += buyBox(e); setTimeout(tickCountdowns, 0); }
       if (j.invite && !j.invite.mine && j.invite.used) h += '<div class="card"><p class="sc">Invitation</p><h2>This link has already been used.</h2><p class="quiet small">Ask ' + esc(host.name) + ' for a new one.</p></div>';
       else if (j.invite && !(j.mine && j.mine.invite_code === j.invite.code)) h += inviteForm(e, j.invite, person || j.mine || {});
       else if (j.mine) h += statusCard(e, j.mine, id) + inviteFriends(e, j.mine) + afterRsvp(e, j.mine, id);
@@ -1167,7 +1192,7 @@
         person = j.person; say('Done. Your next invitations will be waiting here.'); viewGuest(pid);
       }).catch(fail);
     } else if (/^f-tixcap-/.test(f.id)) {
-      api('PATCH', '/events/' + current.event.id + '/tickets/' + f.getAttribute('data-id'), { capacity: d.capacity || 0 }).then(function () { say(d.capacity ? 'Limit set: ' + d.capacity + ' tickets.' : 'No limit.'); loadTix(); }).catch(fail);
+      api('PATCH', '/events/' + current.event.id + '/tickets/' + f.getAttribute('data-id'), { capacity: d.capacity || 0, sale_ends: d.sale_ends ? new Date(d.sale_ends).toISOString() : '' }).then(function () { say('Saved.'); loadTix(); }).catch(fail);
     } else if (f.id === 'f-tixtype') {
       api('POST', '/events/' + current.event.id + '/tickets', d).then(function () { say('Ticket added. It is on sale on your event page.'); loadTix(); }).catch(fail);
     } else if (f.id === 'f-buy') {
