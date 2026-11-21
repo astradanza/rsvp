@@ -310,6 +310,21 @@
     document.getElementById('bt-calc').textContent = t ? n + ' × ' + t.name + ' · ' + fmtMoney(t.price, t.currency) : '';
     document.getElementById('bt-sum').textContent = t ? fmtMoney(t.price * n, t.currency) : '';
   }
+  // One guest's QR code (invitation links, sent the day of the event)
+  function viewPass(code) {
+    header('guest'); loading();
+    api('GET', '/pass/' + encodeURIComponent(code)).then(function (j) {
+      var e = j.event, p = j.pass;
+      return loadScript('/qrcode.js').then(function () {
+        var q = qrcode(0, 'M'); q.addData(p.code); q.make();
+        main.innerHTML = '<div class="stack lg"><div class="stack"><p class="sc">' + esc(e.host.name) + ' · Guestlist</p><h1>' + esc(e.title) + '</h1>' +
+          (e.starts_at ? '<p class="when">' + esc(whenLine(e)) + '</p>' : '') + ([e.venue, e.city].filter(Boolean).length ? '<p class="quiet">' + esc([e.venue, e.city].filter(Boolean).join(', ')) + '</p>' : '') + '</div>' +
+          '<div class="ticket"><div class="qr">' + q.createSvgTag({ cellSize: 6, margin: 2, scalable: true }) + '</div><p class="sc">' + esc(p.holder) + '</p><p class="code">' + esc(p.code) + '</p>' +
+          (p.checked_in_at ? '<p class="small"><span class="tag">checked in</span></p>' : '') + '</div>' +
+          '<p class="quiet small center">Show this code at the door. It works once. A screenshot works too.</p></div>';
+      });
+    }).catch(showError);
+  }
   function viewTickets(tk) {
     header('guest'); loading();
     var tries = 0;
@@ -695,7 +710,7 @@
   }
   function invitesBox() {
     var h = '<div class="box"><span class="sc">Unique invitation links</span>' +
-      '<p class="quiet small">One link for one guest, who registers up to the number of names you choose. Confirmed right away.</p>' +
+      '<p class="quiet small">One link for one guest, who registers up to the number of guests you choose, each with a name and an email. Confirmed right away. Each guest gets their own QR code by email on the day of the event; <a href="/e/' + esc(current.event.id) + '/scan">scan them at the door</a>.</p>' +
       '<div class="toolbar" style="justify-content:flex-start;gap:14px"><div class="stepper"><button type="button" data-act="slots" data-id="-1" aria-label="Fewer names">−</button>' +
       '<span><b>' + current.slots + '</b> ' + (current.slots === 1 ? 'name' : 'names') + '</span><button type="button" data-act="slots" data-id="1" aria-label="More names">+</button></div>' +
       '<input id="inv-label" maxlength="80" placeholder="For whom (optional)" style="flex:1;min-width:140px;font-size:16px"></div>' +
@@ -860,15 +875,21 @@
   }
   // A unique link: the guest registers up to N names (theirs first)
   function inviteForm(e, inv, v) {
-    var n = inv.slots, others = v.names || [], rows = '';
-    for (var i = 1; i < n; i++) rows += '<label><span>Name ' + (i + 1) + (i === 1 ? ' (optional)' : '') + '</span><input name="n' + i + '" maxlength="100" autocomplete="off" value="' + esc(others[i - 1] || '') + '"></label>';
-    return '<div class="stack"><div class="card"><p class="sc">Invitation</p><h2>You\'ve been invited to register ' + n + (n === 1 ? ' name' : ' names') + ' on the guestlist.</h2>' +
+    var n = inv.slots, others = v.names || [], mails = v.emails || [], rows = '';
+    // Each other guest: a full name and an email (their own QR code goes there)
+    for (var i = 1; i < n; i++) rows += '<div class="guestrow"><span class="sc">Guest ' + (i + 1) + (i === 1 && n === 2 ? ' (optional)' : '') + '</span>' +
+      '<label><span>Full name</span><input name="n' + i + '" maxlength="100" autocomplete="off" value="' + esc(others[i - 1] || '') + '"></label>' +
+      '<label><span>Email</span><input name="m' + i + '" type="email" maxlength="160" autocomplete="off" value="' + esc(mails[i - 1] || '') + '"></label></div>';
+    var editing = !!v.invite_code;
+    return '<div class="stack"><div class="card"><p class="sc">Invitation</p><h2>You\'ve been invited to register ' + n + (n === 1 ? ' guest' : ' guests') + ' on the guestlist.</h2>' +
       '<p class="quiet small">From ' + esc(e.host.name) + '. Confirmed as soon as you send it.</p></div>' +
       '<form id="f-rsvp" data-id="' + esc(e.id) + '" data-inv="' + esc(inv.code) + '" data-slots="' + n + '">' +
-      '<label><span>Your full name</span><input name="name" maxlength="100" required autocomplete="name" value="' + esc(v.name || '') + '"></label>' +
-      '<label><span>Your email</span><input name="email" type="email" required autocomplete="email" value="' + esc(v.email || '') + '"></label>' + rows +
-      '<p class="err" hidden></p><button class="btn wide" type="submit">RSVP</button></form>' +
-      '<p class="quiet small center">Names and email go to ' + esc(e.host.name) + ' only.</p></div>';
+      '<div class="guestrow"><span class="sc">You</span>' +
+      '<label><span>Full name</span><input name="name" maxlength="100" required autocomplete="name" value="' + esc(v.name || '') + '"></label>' +
+      '<label><span>Email</span><input name="email" type="email" required autocomplete="email" value="' + esc(v.email || '') + '"></label></div>' + rows +
+      '<p class="quiet small">Each guest receives their own QR code by email on the day of the event. You can save and edit your guests until then.</p>' +
+      '<p class="err" hidden></p><button class="btn wide" type="submit">' + (editing ? 'Save changes' : 'RSVP') + '</button></form>' +
+      '<p class="quiet small center">Names and emails go to ' + esc(e.host.name) + ' only.</p></div>';
   }
   function rsvpForm(e, v) {
     var opts = '';
@@ -882,6 +903,13 @@
       '<p class="quiet small center">Your name and email go to ' + esc(e.host.name) + ' only.</p></div>';
   }
   function statusCard(e, m, id) {
+    if (m.invite_code && m.status === 'confirmed') {
+      var ppl = [m.name + ' · ' + m.email].concat((m.names || []).map(function (n, i) { return n + ((m.emails || [])[i] ? ' · ' + m.emails[i] : ''); }));
+      return '<div class="card"><p class="sc">Confirmed</p><h2>You\'re on the list.</h2>' +
+        '<div class="stack" style="gap:4px">' + ppl.map(function (x) { return '<p class="quiet" style="margin:0">' + esc(x) + '</p>'; }).join('') + '</div>' +
+        '<p class="quiet small">' + (m.locked ? 'The QR codes have been sent by email, one to each guest.' : 'Each guest receives their own QR code by email on the day of the event. You can edit your guests until then.') + '</p>' +
+        (m.locked ? '' : '<p><button class="link small" data-act="editrsvp" data-id="' + esc(id) + '">Edit my guests</button></p>') + '</div>';
+    }
     var ok = m.status === 'confirmed', no = m.status === 'declined';
     return '<div class="card"><p class="sc">' + (ok ? 'Confirmed' : no ? 'Guestlist' : 'Request sent') + '</p>' +
       '<h2>' + (ok ? 'You\'re on the list.' : no ? 'The list is full.' : 'Your request is in.') + '</h2>' +
@@ -1087,7 +1115,7 @@
     if (act === 'editrsvp') {
       api('GET', '/p/' + id + '?t=' + encodeURIComponent(tokenFor(id))).then(function (j) {
         var card = main.querySelector('.card');
-        if (card) card.outerHTML = j.mine && j.mine.invite_code ? inviteForm(j.event, { code: j.mine.invite_code, slots: (j.invite && j.invite.slots) || (j.mine.names.length + 1) }, j.mine) : rsvpForm(j.event, j.mine || {});
+        if (card) card.outerHTML = j.mine && j.mine.invite_code ? inviteForm(j.event, { code: j.mine.invite_code, slots: (j.invite && j.invite.slots) || j.mine.slots || (j.mine.names.length + 1) }, j.mine) : rsvpForm(j.event, j.mine || {});
         var box = main.querySelector('#f-person'); if (box) box.closest('.box').remove();
       });
       return;
@@ -1241,8 +1269,8 @@
       var gid = f.getAttribute('data-id');
       d.plus = Number(d.plus || 0);
       if (f.getAttribute('data-inv')) {
-        d.inv = f.getAttribute('data-inv'); d.t = tokenFor(gid) || undefined; d.names = [];
-        for (var k = 1; k < Number(f.getAttribute('data-slots')); k++) if (d['n' + k]) d.names.push(d['n' + k]);
+        d.inv = f.getAttribute('data-inv'); d.t = tokenFor(gid) || undefined; d.guests = [];
+        for (var k = 1; k < Number(f.getAttribute('data-slots')); k++) if (d['n' + k] || d['m' + k]) d.guests.push({ name: d['n' + k] || '', email: d['m' + k] || '' });
       }
       try { d.via = sessionStorage.getItem('via:' + gid) || undefined; d.ref = sessionStorage.getItem('ref:' + gid) || undefined; } catch (e) {}
       api('POST', '/p/' + gid + '/rsvp', d).then(function (r) {
@@ -1330,6 +1358,7 @@
     if ((m = /^\/e\/([a-z0-9]{4,16})\/edit$/.exec(p))) return viewEdit(m[1]);
     if ((m = /^\/e\/([a-z0-9]{4,16})\/scan$/.exec(p))) return viewScan(m[1]);
     if ((m = /^\/tickets\/([A-Za-z0-9_-]{20,64})$/.exec(p))) return viewTickets(m[1]);
+    if ((m = /^\/pass\/([A-Za-z0-9]{6,20})$/.exec(p))) return viewPass(m[1]);
     if ((m = /^\/([a-z0-9][a-z0-9_-]{1,29})\/([a-z0-9][a-z0-9-]{0,59})(?:\/([a-z0-9][a-z0-9-]{0,29}))?$/i.exec(p)) && m[1] !== 'e' && m[1] !== 'i') {
       loading();
       var secret = m[3] ? m[3].toLowerCase() : '';

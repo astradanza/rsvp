@@ -197,6 +197,22 @@ export async function mailTickets(env, { event, org, order, count, typeName, amo
   });
 }
 
+// The day of the event: one guest's QR code, to their own email
+export async function mailPass(env, { event, org, to, name, code }) {
+  const where = [event.venue, event.city].filter(Boolean).map(esc).join(', ');
+  return send(env, {
+    to, fromHandle: org.handle, fromName: org.name, kind: 'pass', event_id: event.id, org_id: org.id,
+    subject: `Your QR code for tonight · ${event.title}`,
+    body: {
+      kicker: 'Today', title: `${esc(name)}, here is your QR code`,
+      lines: [`<strong>${esc(event.title)}</strong>${when(event) ? '<br>' + esc(when(event)) : ''}${where ? '<br>' + where : ''}`, 'Show it at the door. It works once and only for you.'],
+      button: { label: 'Show my QR code', href: `${appUrl(env)}/pass/${encodeURIComponent(code)}` },
+      after: [`Code: ${esc(code)}`],
+      footer: `${esc(org.name)} put you on the guestlist through rsvp.fm.`
+    }
+  });
+}
+
 // ---------- daily digest: pending invitations ----------
 // For each guest who joined at least one page: new invitations (open upcoming events they haven't answered)
 // and, once, a reminder for invitations still waiting when the event is less than three days away.

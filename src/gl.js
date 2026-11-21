@@ -4,7 +4,7 @@
 // can opt in to the organizer's next invitations and keep a guest account to receive them here.
 // Own tables (gl_*), own sessions, own static app (public/gl/).
 
-import { mailEnabled, mailRsvp, mailConfirmed, mailMessage, mailReset, mailAdmin, adminRecap, mailTickets, sendDigests, prefsFor } from './gl-mail.js';
+import { mailEnabled, mailRsvp, mailConfirmed, mailMessage, mailReset, mailAdmin, adminRecap, mailTickets, mailPass, sendDigests, prefsFor } from './gl-mail.js';
 import { migrateV1 } from './gl-migrate.js';
 import { vapidKeys, validSubscription, pushTo } from './gl-push.js';
 
@@ -25,7 +25,7 @@ function customOf(o) {
 }
 function themeOf(theme, custom) { return theme === 'custom' && custom ? 'custom' : THEMES.includes(theme) ? theme : DEFAULT_THEME; }
 const RESERVED = new Set(['api', 'e', 'i', 'new', 'login', 'signup', 'logout', 'account', 'community', 'me', 'img', 'app', 'style', 'favicon', 'prefs',
-  'admin', 'settings', 'help', 'about', 'terms', 'privacy', 'www', 'list', 'rsvp', 'events', 'event', 'invite', 'join', 'guest', 'guests', 'forgot', 'reset', 'password', 'news', 'feed', 'tickets', 'scan', 't']);
+  'admin', 'settings', 'help', 'about', 'terms', 'privacy', 'www', 'list', 'rsvp', 'events', 'event', 'invite', 'join', 'guest', 'guests', 'forgot', 'reset', 'password', 'news', 'feed', 'tickets', 'scan', 't', 'pass']);
 const ADMINS = new Set(['astradanza']);
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,29}$/;
 
@@ -171,7 +171,8 @@ async function ensureSchema(env) {
     ['theme', "TEXT NOT NULL DEFAULT 'creme'"], ['visibility', "TEXT NOT NULL DEFAULT 'public'"], ['join_mode', "TEXT NOT NULL DEFAULT 'open'"], ['invite_token', 'TEXT'],
     ['custom_theme', "TEXT NOT NULL DEFAULT ''"], ['v1_user_id', 'INTEGER']
   ]);
-  await addColumns(env, 'gl_guests', [['consent', 'INTEGER NOT NULL DEFAULT 0'], ['names', "TEXT NOT NULL DEFAULT ''"], ['invite_code', 'TEXT'], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['via', 'INTEGER'], ['ref', "TEXT NOT NULL DEFAULT ''"]]);
+  await addColumns(env, 'gl_guests', [['consent', 'INTEGER NOT NULL DEFAULT 0'], ['names', "TEXT NOT NULL DEFAULT ''"], ['invite_code', 'TEXT'], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['via', 'INTEGER'], ['ref', "TEXT NOT NULL DEFAULT ''"], ['emails', "TEXT NOT NULL DEFAULT ''"], ['pass_sent', "TEXT NOT NULL DEFAULT ''"]]);
+  await addColumns(env, 'gl_tickets', [['email', "TEXT NOT NULL DEFAULT ''"], ['guest_id', 'INTEGER']]);
   await addColumns(env, 'gl_orders', [['ref', "TEXT NOT NULL DEFAULT ''"]]);
   await addColumns(env, 'gl_events', [['listed', 'INTEGER NOT NULL DEFAULT 1'], ['slug', 'TEXT'], ['photos', "TEXT NOT NULL DEFAULT '[]'"],
     ['msg_subject', "TEXT NOT NULL DEFAULT ''"], ['msg_text', "TEXT NOT NULL DEFAULT ''"], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['msg_auto', 'INTEGER NOT NULL DEFAULT 0'], ['msg_photo', "TEXT NOT NULL DEFAULT ''"], ['guest_invites', 'INTEGER NOT NULL DEFAULT 1'], ['tix_releases', 'INTEGER NOT NULL DEFAULT 0'], ['meta_title', "TEXT NOT NULL DEFAULT ''"]]);
@@ -495,6 +496,13 @@ async function ticketsApi({ request, env, url, method, path, seg, org, person, l
     if (ev.type === 'checkout.session.expired') await env.DB.prepare(`UPDATE gl_orders SET status = 'expired' WHERE stripe_session = ? AND status = 'pending'`).bind(ev.data.object.id).run();
     return json({ received: true });
   }
+  // One guest's QR code (sent the day of the event to guests of an invitation link)
+  if (seg[0] === 'pass' && seg[1] && method === 'GET') {
+    const k = await env.DB.prepare('SELECT * FROM gl_tickets WHERE code = ?').bind(String(seg[1]).toUpperCase()).first();
+    if (!k) fail(404, 'This QR code does not exist.');
+    const e = await env.DB.prepare('SELECT e.*, g.name AS org_name, g.handle AS org_handle FROM gl_events e JOIN gl_orgs g ON g.id = e.org_id WHERE e.id = ?').bind(k.event_id).first();
+    return json({ pass: { code: k.code, holder: k.holder, checked_in_at: k.checked_in_at }, event: { ...eventShape(e), auto_confirm: undefined, host: { name: e.org_name, handle: e.org_handle } } });
+  }
   // The buyer's tickets (the link in their email and the page they land on after paying)
   if (seg[0] === 'orders' && seg[1] && method === 'GET') {
     let o = await env.DB.prepare('SELECT * FROM gl_orders WHERE token = ?').bind(seg[1]).first();
@@ -559,7 +567,8 @@ async function ticketsApi({ request, env, url, method, path, seg, org, person, l
   }
   // --- host side (beta) ---
   if (!org) fail(401, 'Log in first.');
-  if (!tixBeta(org)) fail(404, 'Not found.');
+  // The door scanner works for every host (QR codes of invitation links); the rest is the tickets beta
+  if (!tixBeta(org) && seg[2] !== 'checkin') fail(404, 'Not found.');
   const e = await ownEvent(env, org, seg[1]);
   if (seg[2] === 'tickets' && !seg[3] && method === 'GET') {
     const orders = (await env.DB.prepare(`SELECT * FROM gl_orders WHERE event_id = ? AND status = 'paid' ORDER BY id DESC`).bind(e.id).all()).results;
@@ -607,9 +616,9 @@ async function ticketsApi({ request, env, url, method, path, seg, org, person, l
     const tk = c ? await env.DB.prepare('SELECT k.*, t.name AS type FROM gl_tickets k LEFT JOIN gl_ticket_types t ON t.id = k.type_id WHERE k.code = ?').bind(c).first() : null;
     if (!tk) return json({ result: 'unknown', message: 'Unknown code.' });
     if (tk.event_id !== e.id) return json({ result: 'other', message: 'This ticket is for another event.' });
-    if (tk.checked_in_at) return json({ result: 'used', message: 'Already scanned', holder: tk.holder, type: tk.type, at: tk.checked_in_at });
+    if (tk.checked_in_at) return json({ result: 'used', message: 'Already scanned', holder: tk.holder, type: tk.type || 'Guestlist', at: tk.checked_in_at });
     await env.DB.prepare(`UPDATE gl_tickets SET checked_in_at = datetime('now') WHERE id = ? AND checked_in_at IS NULL`).bind(tk.id).run();
-    return json({ result: 'ok', message: 'Welcome', holder: tk.holder, type: tk.type });
+    return json({ result: 'ok', message: 'Welcome', holder: tk.holder, type: tk.type || 'Guestlist' });
   }
   fail(404, 'Not found.');
 }
@@ -1306,7 +1315,9 @@ async function api(request, env, url, ctx) {
       const tickets = ADMINS.has(e.org_handle) ? (await eventTickets(env, e, url.searchParams.get('k'))).filter((t) => t.active || e.tix_releases).map((t) => ({ ...t, sold: undefined, capacity: undefined, access_code: undefined })) : [];
       return json({
         event: { ...shape, updates: updates.map(updateShape), tickets }, invite,
-        mine: mine ? { name: mine.name, email: mine.email, plus: mine.plus, names: namesOf(mine), invite_code: mine.invite_code || '', status: mine.status, consent: !!mine.consent, ref: e.guest_invites ? guestRef(mine) : '', has_account: !!person || !!(await env.DB.prepare('SELECT 1 FROM gl_people WHERE email = ?').bind(mine.email).first()) } : null,
+        mine: mine ? { name: mine.name, email: mine.email, plus: mine.plus, names: namesOf(mine), emails: String(mine.emails || '').split('\n').map((x) => x.trim()),
+          slots: mine.invite_code ? ((await env.DB.prepare('SELECT slots FROM gl_invites WHERE code = ?').bind(mine.invite_code).first()) || {}).slots || namesOf(mine).length + 1 : 0,
+          locked: !!mine.pass_sent, invite_code: mine.invite_code || '', status: mine.status, consent: !!mine.consent, ref: e.guest_invites ? guestRef(mine) : '', has_account: !!person || !!(await env.DB.prepare('SELECT 1 FROM gl_people WHERE email = ?').bind(mine.email).first()) } : null,
         person: person ? personShape(person) : null
       });
     }
@@ -1339,21 +1350,31 @@ async function api(request, env, url, ctx) {
         const email = str(b.email, 160).toLowerCase();
         if (name.length < 2) fail(400, 'Enter your full name.');
         if (!EMAIL_RE.test(email)) fail(400, 'Enter a valid email address.');
-        const names = (Array.isArray(b.names) ? b.names : []).map((x) => str(x, 100)).filter(Boolean).slice(0, iv.slots - 1);
+        // The other guests: each one a full name and an email (both, or the row is left out)
+        const others = (Array.isArray(b.guests) ? b.guests : []).map((x) => ({ name: str(x && x.name, 100), email: str(x && x.email, 160).toLowerCase() }))
+          .filter((x) => x.name || x.email).slice(0, iv.slots - 1);
+        for (const x of others) {
+          if (x.name.length < 2) fail(400, 'Enter the full name of each guest.');
+          if (!EMAIL_RE.test(x.email)) fail(400, 'Enter a valid email for ' + x.name + '.');
+        }
+        const all = [email, ...others.map((x) => x.email)];
+        if (new Set(all).size !== all.length) fail(400, 'Each guest needs their own email.');
+        const names = others.map((x) => x.name), emails = others.map((x) => x.email);
         let g = iv.guest_id ? await env.DB.prepare('SELECT * FROM gl_guests WHERE id = ?').bind(iv.guest_id).first() : null;
         if (g && !(b.t && b.t === g.token) && !(person && person.email === g.email)) fail(409, 'This invitation link has already been used.');
+        if (g && g.pass_sent) fail(409, 'The QR codes have been sent: the guests can no longer be changed.');
         if (g && g.email !== email && await env.DB.prepare('SELECT 1 FROM gl_guests WHERE event_id = ? AND email = ? AND id != ?').bind(e.id, email, g.id).first()) fail(409, 'That email is already on the list.');
         if (!g) g = await env.DB.prepare('SELECT * FROM gl_guests WHERE event_id = ? AND email = ?').bind(e.id, email).first();
         await upsertContact(env, e.org_id, { email, name, status: 'member', source: 'invitation · ' + e.title.slice(0, 60), invited: true });
         let t;
         if (g) {
           t = g.token;
-          await env.DB.prepare(`UPDATE gl_guests SET name = ?, email = ?, plus = ?, names = ?, invite_code = ?, status = 'confirmed', updated_at = datetime('now') WHERE id = ?`)
-            .bind(name, email, names.length, names.join('\n'), iv.code, g.id).run();
+          await env.DB.prepare(`UPDATE gl_guests SET name = ?, email = ?, plus = ?, names = ?, emails = ?, invite_code = ?, status = 'confirmed', updated_at = datetime('now') WHERE id = ?`)
+            .bind(name, email, names.length, names.join('\n'), emails.join('\n'), iv.code, g.id).run();
         } else {
           t = token();
-          g = await env.DB.prepare(`INSERT INTO gl_guests (event_id, name, email, plus, names, invite_code, status, token) VALUES (?, ?, ?, ?, ?, ?, 'confirmed', ?) RETURNING *`)
-            .bind(e.id, name, email, names.length, names.join('\n'), iv.code, t).first();
+          g = await env.DB.prepare(`INSERT INTO gl_guests (event_id, name, email, plus, names, emails, invite_code, status, token) VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmed', ?) RETURNING *`)
+            .bind(e.id, name, email, names.length, names.join('\n'), emails.join('\n'), iv.code, t).first();
           await later(mailRsvp(env, { event: e, org: { id: e.org_id, name: e.org_name, handle: e.org_handle }, guest: { name, email, plus: names.length, status: 'confirmed', token: t } }));
         }
         await later(followUp(env, e, { id: e.org_id, name: e.org_name, handle: e.org_handle }, g));
@@ -1415,8 +1436,31 @@ export function isGuestlistHost(hostname) {
 // Daily (cron): email guests their pending invitations
 const newGuestNote = (env, p, how) => p ? mailAdmin(env, `New guest account: ${p.name}`, `${p.name} (${p.email}) created a guest account on rsvp.fm, ${how}.`) : null;
 
+async function sendPasses(env) {
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = (await env.DB.prepare(`SELECT g.*, e.id AS ev_id FROM gl_guests g JOIN gl_events e ON e.id = g.event_id
+    WHERE g.status = 'confirmed' AND g.invite_code IS NOT NULL AND g.invite_code != '' AND g.pass_sent = '' AND substr(e.starts_at, 1, 10) = ?`).bind(today).all()).results;
+  let sent = 0;
+  for (const g of rows) {
+    const r = await env.DB.prepare(`UPDATE gl_guests SET pass_sent = datetime('now') WHERE id = ? AND pass_sent = ''`).bind(g.id).run();
+    if (!r.meta.changes) continue;
+    const e = await env.DB.prepare('SELECT * FROM gl_events WHERE id = ?').bind(g.event_id).first();
+    const o = await env.DB.prepare('SELECT * FROM gl_orgs WHERE id = ?').bind(e.org_id).first();
+    const names = namesOf(g), emails = String(g.emails || '').split('\n').map((x) => x.trim());
+    const people = [{ name: g.name, email: g.email }, ...names.map((n, i) => ({ name: n, email: emails[i] || g.email }))];
+    for (const pp of people) {
+      const c = tixCode();
+      await env.DB.prepare('INSERT INTO gl_tickets (code, order_id, event_id, type_id, holder, email, guest_id) VALUES (?, 0, ?, 0, ?, ?, ?)').bind(c, e.id, pp.name, pp.email, g.id).run();
+      await mailPass(env, { event: e, org: o, to: pp.email, name: pp.name, code: c });
+      sent++;
+    }
+  }
+  return { passes: sent };
+}
+
 export async function guestlistDaily(env) {
   await ensureSchema(env);
+  try { console.log('passes', JSON.stringify(await sendPasses(env))); } catch (e) { console.error('passes', e); }
   try { console.log('admin recap', JSON.stringify(await adminRecap(env))); } catch (e) { console.error('admin recap', e); }
   const r = await sendDigests(env);
   console.log('guestlist digest', JSON.stringify(r));
