@@ -144,6 +144,9 @@ async function ensureSchema(env) {
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL UNIQUE, order_id INTEGER NOT NULL, event_id TEXT NOT NULL,
       type_id INTEGER NOT NULL, holder TEXT NOT NULL DEFAULT '', checked_in_at TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
     env.DB.prepare('CREATE INDEX IF NOT EXISTS gl_tickets_order ON gl_tickets(order_id)'),
+    // Referral links (rsvp.fm/<handle>/<event>?ref=<code>): who brought visits, RSVPs and ticket sales
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_refs (id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL REFERENCES gl_events(id) ON DELETE CASCADE,
+      code TEXT NOT NULL, label TEXT NOT NULL, visits INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE (event_id, code))`),
     // Magic links (forgotten password): one use, one hour
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_resets (token TEXT PRIMARY KEY, kind TEXT NOT NULL, account_id INTEGER NOT NULL, email TEXT NOT NULL,
       used INTEGER NOT NULL DEFAULT 0, expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
@@ -168,7 +171,8 @@ async function ensureSchema(env) {
     ['theme', "TEXT NOT NULL DEFAULT 'creme'"], ['visibility', "TEXT NOT NULL DEFAULT 'public'"], ['join_mode', "TEXT NOT NULL DEFAULT 'open'"], ['invite_token', 'TEXT'],
     ['custom_theme', "TEXT NOT NULL DEFAULT ''"], ['v1_user_id', 'INTEGER']
   ]);
-  await addColumns(env, 'gl_guests', [['consent', 'INTEGER NOT NULL DEFAULT 0'], ['names', "TEXT NOT NULL DEFAULT ''"], ['invite_code', 'TEXT'], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['via', 'INTEGER']]);
+  await addColumns(env, 'gl_guests', [['consent', 'INTEGER NOT NULL DEFAULT 0'], ['names', "TEXT NOT NULL DEFAULT ''"], ['invite_code', 'TEXT'], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['via', 'INTEGER'], ['ref', "TEXT NOT NULL DEFAULT ''"]]);
+  await addColumns(env, 'gl_orders', [['ref', "TEXT NOT NULL DEFAULT ''"]]);
   await addColumns(env, 'gl_events', [['listed', 'INTEGER NOT NULL DEFAULT 1'], ['slug', 'TEXT'], ['photos', "TEXT NOT NULL DEFAULT '[]'"],
     ['msg_subject', "TEXT NOT NULL DEFAULT ''"], ['msg_text', "TEXT NOT NULL DEFAULT ''"], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['msg_auto', 'INTEGER NOT NULL DEFAULT 0'], ['msg_photo', "TEXT NOT NULL DEFAULT ''"], ['guest_invites', 'INTEGER NOT NULL DEFAULT 1'], ['tix_releases', 'INTEGER NOT NULL DEFAULT 0'], ['meta_title', "TEXT NOT NULL DEFAULT ''"]]);
   await addColumns(env, 'gl_ticket_types', [['sale_ends', "TEXT NOT NULL DEFAULT ''"], ['access_code', "TEXT NOT NULL DEFAULT ''"]]);
@@ -298,8 +302,8 @@ const eventShape = (e) => ({
 const updateShape = (u) => ({ id: u.id, text: u.text, photo: u.photo || '', guests_only: !!u.guests_only, emailed: !!u.emailed, created_at: u.created_at });
 const msgShape = (e) => ({ subject: e.msg_subject || '', text: e.msg_text || '', at: e.msg_at || '', auto: !!e.msg_auto });
 // A guest's share code (?via=…): who brought whom. Not secret: it only says who shared the link.
-const refOf = (g) => (g && g.id ? Number(g.id).toString(36) : '');
-const guestShape = (g) => ({ id: g.id, name: g.name, email: g.email, plus: g.plus, names: namesOf(g), invite_code: g.invite_code || '', status: g.status, consent: !!g.consent, via: g.via || null, ref: refOf(g), created_at: g.created_at, updated_at: g.updated_at });
+const guestRef = (g) => (g && g.id ? Number(g.id).toString(36) : '');
+const guestShape = (g) => ({ id: g.id, name: g.name, email: g.email, plus: g.plus, names: namesOf(g), invite_code: g.invite_code || '', status: g.status, consent: !!g.consent, via: g.via || null, ref: guestRef(g), source_ref: g.ref || '', created_at: g.created_at, updated_at: g.updated_at });
 // Event photos: a JSON list of /api/img/<id>, the first one is the cover
 const photosOf = (e) => { try { const a = JSON.parse(e.photos || '[]'); return Array.isArray(a) ? a.filter((x) => /^\/api\/img\/[a-z0-9]+$/.test(x)) : []; } catch { return []; } };
 // Keep only photos this organizer uploaded, at most 12
@@ -412,6 +416,13 @@ async function stripe(env, method, path, params) {
   if (!r.ok) { console.error('stripe', path, r.status, JSON.stringify(j.error || j)); fail(502, (j.error && j.error.message) || 'Payment service error.'); }
   return j;
 }
+// A referral code sent with an RSVP or an order, kept only if the event has it
+const REF_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+async function refOf(env, eventId, code) {
+  const c = String(code || '').toLowerCase();
+  if (!REF_RE.test(c)) return '';
+  return (await env.DB.prepare('SELECT 1 FROM gl_refs WHERE event_id = ? AND code = ?').bind(eventId, c).first()) ? c : '';
+}
 async function metaGet(env, key) { const r = await env.DB.prepare('SELECT value FROM gl_meta WHERE key = ?').bind(key).first(); return r ? r.value : ''; }
 async function metaSet(env, key, value) { await env.DB.prepare('INSERT INTO gl_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(key, value).run(); }
 const tixCode = () => code(10).toUpperCase();
@@ -452,7 +463,7 @@ async function fulfillOrder(env, order, later) {
   await env.DB.batch(stmts);
   const prev = await env.DB.prepare('SELECT * FROM gl_guests WHERE event_id = ? AND email = ?').bind(e.id, order.email).first();
   if (prev) await env.DB.prepare(`UPDATE gl_guests SET status = 'confirmed', plus = MAX(plus, ?), updated_at = datetime('now') WHERE id = ?`).bind(Math.min(order.qty - 1, 9), prev.id).run();
-  else await env.DB.prepare(`INSERT INTO gl_guests (event_id, name, email, plus, status, token) VALUES (?, ?, ?, ?, 'confirmed', ?)`).bind(e.id, order.name, order.email, Math.min(order.qty - 1, 9), token()).run();
+  else await env.DB.prepare(`INSERT INTO gl_guests (event_id, name, email, plus, status, token, ref) VALUES (?, ?, ?, ?, 'confirmed', ?, ?)`).bind(e.id, order.name, order.email, Math.min(order.qty - 1, 9), token(), order.ref || '').run();
   const p = mailTickets(env, { event: e, org: o, order, count: order.qty, typeName: t ? t.name : 'Ticket', amount: money(order.amount, order.currency) })
     .then(() => mailAdmin(env, `Ticket sale: ${order.qty} × ${t ? t.name : 'ticket'} · ${e.title}`, `${order.name} (${order.email}) bought ${order.qty} × ${t ? t.name : 'ticket'} for ${e.title}: ${money(order.amount, order.currency)}.`));
   if (later) await later(p); else await p;
@@ -513,8 +524,8 @@ async function ticketsApi({ request, env, url, method, path, seg, org, person, l
     if (e.tix_releases && !t.access_code) { const me = (await eventTickets(env, e)).find((x) => x.id === t.id); if (!me || me.release === 'past') fail(409, 'This ticket is sold out. Reload the page.'); }
     if (t.capacity) { const sold = (await soldByType(env, e.id))[t.id] || 0; if (sold + qty > t.capacity) fail(409, t.capacity - sold > 0 ? `Only ${t.capacity - sold} left.` : 'Sold out.'); }
     const tk = token();
-    const o = await env.DB.prepare(`INSERT INTO gl_orders (token, event_id, type_id, qty, name, email, amount, currency, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending') RETURNING *`)
-      .bind(tk, e.id, t.id, qty, name, email, t.price * qty, t.currency).first();
+    const o = await env.DB.prepare(`INSERT INTO gl_orders (token, event_id, type_id, qty, name, email, amount, currency, status, ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?) RETURNING *`)
+      .bind(tk, e.id, t.id, qty, name, email, t.price * qty, t.currency, await refOf(env, e.id, b.ref)).first();
     const evUrl = url.origin + (e.slug ? `/${e.org_handle}/${e.slug}` : `/${e.id}`);
     const s = await stripe(env, 'POST', '/checkout/sessions', {
       mode: 'payment', customer_email: email, client_reference_id: String(o.id),
@@ -970,6 +981,31 @@ async function api(request, env, url, ctx) {
       return json({ ok: true });
     }
     // Updates: posted on the event page; emailed (and pushed) to the guests only when asked
+    // Referral links: create, list with what each one brought, delete
+    if (seg[2] === 'refs' && !seg[3] && method === 'GET') {
+      const refs = (await env.DB.prepare('SELECT * FROM gl_refs WHERE event_id = ? ORDER BY id').bind(e.id).all()).results;
+      const g = (await env.DB.prepare(`SELECT ref, COUNT(*) AS rsvps, SUM(CASE WHEN status = 'confirmed' THEN 1 + plus ELSE 0 END) AS people FROM gl_guests WHERE event_id = ? AND ref != '' GROUP BY ref`).bind(e.id).all()).results;
+      const o = (await env.DB.prepare(`SELECT ref, currency, SUM(qty) AS tickets, SUM(amount) AS amount FROM gl_orders WHERE event_id = ? AND status = 'paid' AND ref != '' GROUP BY ref, currency`).bind(e.id).all()).results;
+      return json({ refs: refs.map((r) => {
+        const gg = g.find((x) => x.ref === r.code) || {}, oo = o.filter((x) => x.ref === r.code);
+        return { id: r.id, code: r.code, label: r.label, visits: r.visits, rsvps: gg.rsvps || 0, people: gg.people || 0,
+          tickets: oo.reduce((a, x) => a + x.tickets, 0), revenue: oo.map((x) => money(x.amount, x.currency)).join(' + '), created_at: r.created_at };
+      }) });
+    }
+    if (seg[2] === 'refs' && !seg[3] && method === 'POST') {
+      const b = await body(request);
+      const label = str(b.label, 60);
+      if (!label) fail(400, 'Name the link: who or where it goes to.');
+      const code = (str(b.code, 40) || slugify(label)).toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+      if (!REF_RE.test(code)) fail(400, 'Use letters and numbers for the link.');
+      const r = await env.DB.prepare('INSERT OR IGNORE INTO gl_refs (event_id, code, label) VALUES (?, ?, ?) RETURNING *').bind(e.id, code, label).first();
+      if (!r) fail(409, 'This link already exists for this event.');
+      return json({ ref: { id: r.id, code: r.code, label: r.label, visits: 0, rsvps: 0, people: 0, tickets: 0, revenue: '' } });
+    }
+    if (seg[2] === 'refs' && seg[3] && method === 'DELETE') {
+      await env.DB.prepare('DELETE FROM gl_refs WHERE id = ? AND event_id = ?').bind(Number(seg[3]), e.id).run();
+      return json({ ok: true });
+    }
     if (seg[2] === 'updates' && !seg[3] && method === 'POST') {
       const b = await body(request);
       const text = (typeof b.text === 'string' ? b.text : '').replace(/\r\n/g, '\n').trim().slice(0, 5000);
@@ -1244,6 +1280,13 @@ async function api(request, env, url, ctx) {
     if (!e) fail(404, 'This guestlist does not exist.');
     const shape = { ...eventShape(e), host: { name: e.org_name, kind: e.org_kind, handle: e.org_handle, logo: e.org_logo || '', theme: themeOf(e.org_theme, customOf(e)), custom: customOf(e), visibility: e.org_visibility, join: e.org_join === 'approval' ? 'approval' : 'open' } };
     delete shape.auto_confirm;
+    // A visit through a referral link (the page sends it once per browser session)
+    if (seg[2] === 'visit' && method === 'POST') {
+      const b = await body(request);
+      const c = await refOf(env, e.id, b.ref);
+      if (c) await env.DB.prepare('UPDATE gl_refs SET visits = visits + 1 WHERE event_id = ? AND code = ?').bind(e.id, c).run();
+      return json({ ok: !!c });
+    }
     if (seg.length === 2 && method === 'GET') {
       const t = url.searchParams.get('t');
       let mine = t ? await env.DB.prepare('SELECT * FROM gl_guests WHERE event_id = ? AND token = ?').bind(e.id, t).first() : null;
@@ -1263,7 +1306,7 @@ async function api(request, env, url, ctx) {
       const tickets = ADMINS.has(e.org_handle) ? (await eventTickets(env, e, url.searchParams.get('k'))).filter((t) => t.active || e.tix_releases).map((t) => ({ ...t, sold: undefined, capacity: undefined, access_code: undefined })) : [];
       return json({
         event: { ...shape, updates: updates.map(updateShape), tickets }, invite,
-        mine: mine ? { name: mine.name, email: mine.email, plus: mine.plus, names: namesOf(mine), invite_code: mine.invite_code || '', status: mine.status, consent: !!mine.consent, ref: e.guest_invites ? refOf(mine) : '', has_account: !!person || !!(await env.DB.prepare('SELECT 1 FROM gl_people WHERE email = ?').bind(mine.email).first()) } : null,
+        mine: mine ? { name: mine.name, email: mine.email, plus: mine.plus, names: namesOf(mine), invite_code: mine.invite_code || '', status: mine.status, consent: !!mine.consent, ref: e.guest_invites ? guestRef(mine) : '', has_account: !!person || !!(await env.DB.prepare('SELECT 1 FROM gl_people WHERE email = ?').bind(mine.email).first()) } : null,
         person: person ? personShape(person) : null
       });
     }
@@ -1342,7 +1385,7 @@ async function api(request, env, url, ctx) {
         const vg = await env.DB.prepare('SELECT id FROM gl_guests WHERE id = ? AND event_id = ?').bind(parseInt(b.via, 36), e.id).first();
         if (vg) via = vg.id;
       }
-      const ng = await env.DB.prepare('INSERT INTO gl_guests (event_id, name, email, plus, status, token, via) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *').bind(e.id, name, email, plus, fresh, t, via).first();
+      const ng = await env.DB.prepare('INSERT INTO gl_guests (event_id, name, email, plus, status, token, via, ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *').bind(e.id, name, email, plus, fresh, t, via, await refOf(env, e.id, b.ref)).first();
       const eo = { id: e.org_id, name: e.org_name, handle: e.org_handle };
       await later((async () => { await mailRsvp(env, { event: e, org: eo, guest: { name, email, plus, status: fresh, token: t } }); await followUp(env, e, eo, ng); })());
       return json({ status: fresh, token: t }, 201);

@@ -605,7 +605,7 @@
       '<div class="acts"><button class="btn small" data-act="copylink" data-id="' + esc(url) + '">Copy link</button>' +
       (navigator.share ? '<button class="btn small line" data-act="sharelink" data-id="' + esc(url) + '">Share…</button>' : '') +
       '<a class="btn small line" href="' + esc(eventPath(e, org.handle)) + '" target="_blank" rel="noopener">View page</a></div></div>' +
-      (org.beta ? '<div id="tix-slot"></div>' : '') + invitesBox() + messageBox() +
+      (org.beta ? '<div id="tix-slot"></div>' : '') + invitesBox() + '<div id="refs-slot"></div>' + messageBox() +
       '<div class="stats"><div class="stat"><b>' + c.requests + '</b><span>Requests</span></div><div class="stat"><b>' + c.people + '</b><span>People</span></div>' +
       '<div class="stat"><b>' + c.confirmed + '</b><span>Confirmed</span></div></div>' +
       '<div class="toolbar"><div class="seg" style="min-width:200px"><label><input type="radio" name="sort" value="arrival"' + (current.sort === 'arrival' ? ' checked' : '') + ' data-act="sort"><span>By arrival</span></label>' +
@@ -629,6 +629,7 @@
     h += '<hr class="rule"><div class="acts"><a class="link" href="/e/' + esc(e.id) + '/edit">Edit event</a><button class="link" data-act="toggleopen">' + (e.open ? 'Close the guestlist' : 'Reopen the guestlist') + '</button></div></div>';
     main.innerHTML = h;
     if (org.beta) loadTix();
+    loadRefs();
   }
   // Unique links: "you've been invited to register N names on the guestlist"
   function inviteUrl(code) { return pageUrl(current.event, org.handle) + '?inv=' + code; }
@@ -672,6 +673,25 @@
         '<div class="acts small"><input name="test_to" type="email" value="' + esc(org.email || '') + '" placeholder="you@example.com" style="flex:1;min-width:160px;font-size:16px"><button class="btn small line" type="button" data-act="testmsg">Send a test</button></div></div>' : '') +
       '<p class="err" hidden></p><div class="acts"><button class="btn small" type="submit">Post the update</button></div></form>' +
       updatesList(e.updates, true) + '</div>';
+  }
+  // Referral links: one per promoter, ambassador or place you post it; what each one brought
+  function loadRefs() {
+    var slot = document.getElementById('refs-slot'); if (!slot || !current) return;
+    api('GET', '/events/' + current.event.id + '/refs').then(function (j) {
+      var base = location.origin + eventPath(current.event, org.handle) + '?ref=';
+      current.refs = j.refs;
+      var h = '<div class="box"><span class="sc">Referral links</span>' +
+        '<p class="quiet small">One link per promoter, friend or place you post it. You see the visits, RSVPs and tickets each one brings.</p>';
+      if (j.refs.length) h += '<div class="list">' + j.refs.map(function (r) {
+        var st = [r.visits + ' visit' + (r.visits === 1 ? '' : 's'), r.rsvps + ' RSVP' + (r.rsvps === 1 ? '' : 's'), r.people + ' confirmed']
+          .concat(r.tickets ? [r.tickets + ' ticket' + (r.tickets === 1 ? '' : 's'), r.revenue] : []).join(' · ');
+        return '<div class="item"><span class="main"><span class="t">' + esc(r.label) + '</span><span class="m">' + esc(st) + '</span>' +
+          '<span class="m" style="word-break:break-all">' + esc((base + r.code).replace(/^https?:\/\//, '')) + '</span></span>' +
+          '<span class="s"><button class="btn small line" data-act="copylink" data-id="' + esc(base + r.code) + '">Copy</button> <button class="link small" data-act="delref" data-id="' + r.id + '">Delete</button></span></div>';
+      }).join('') + '</div>';
+      h += '<form id="f-ref" class="copyfield"><input name="label" maxlength="60" placeholder="Juan, Instagram story, Veleros…" required style="font-size:16px"><button class="btn small" type="submit">Make a link</button></form><p class="err" hidden></p></div>';
+      slot.innerHTML = h;
+    }).catch(function (e) { slot.innerHTML = '<p class="err small">' + esc(e.message) + '</p>'; });
   }
   function invitesBox() {
     var h = '<div class="box"><span class="sc">Unique invitation links</span>' +
@@ -804,6 +824,13 @@
     loading();
     var t = tokenFor(id), inv = inviteFor(id);
     var via0 = new URLSearchParams(location.search).get('via'); if (via0) { try { sessionStorage.setItem('via:' + id, via0); } catch (e) {} }
+    var ref0 = (new URLSearchParams(location.search).get('ref') || '').toLowerCase();
+    if (ref0) {
+      try {
+        sessionStorage.setItem('ref:' + id, ref0);
+        if (!sessionStorage.getItem('refv:' + id + ':' + ref0)) { sessionStorage.setItem('refv:' + id + ':' + ref0, '1'); api('POST', '/p/' + id + '/visit', { ref: ref0 }).catch(function () {}); }
+      } catch (e) {}
+    }
     var key = ''; try { key = sessionStorage.getItem('k:' + id) || ''; } catch (e) {}
     var qs = [t ? 't=' + encodeURIComponent(t) : '', inv ? 'inv=' + encodeURIComponent(inv) : '', key ? 'k=' + encodeURIComponent(key) : ''].filter(Boolean).join('&');
     api('GET', '/p/' + id + (qs ? '?' + qs : '')).then(function (j) {
@@ -1048,8 +1075,8 @@
     }
     if (act === 'csv') {
       var byIdC = {}; current.guests.forEach(function (x) { byIdC[x.id] = x; });
-      return csvDownload([['Name', 'Email', 'Plus ones', 'People', 'Other names', 'Status', 'Keep me posted', 'Invited by', 'Requested at']].concat(sorted().map(function (g) {
-        return [g.name, g.email, g.plus, 1 + g.plus, (g.names || []).join('; '), g.status, g.consent ? 'yes' : 'no', g.via && byIdC[g.via] ? byIdC[g.via].name : '', g.created_at];
+      return csvDownload([['Name', 'Email', 'Plus ones', 'People', 'Other names', 'Status', 'Keep me posted', 'Invited by', 'Referral link', 'Requested at']].concat(sorted().map(function (g) {
+        return [g.name, g.email, g.plus, 1 + g.plus, (g.names || []).join('; '), g.status, g.consent ? 'yes' : 'no', g.via && byIdC[g.via] ? byIdC[g.via].name : '', g.source_ref ? ((current.refs || []).filter(function (r) { return r.code === g.source_ref; })[0] || { label: g.source_ref }).label : '', g.created_at];
       })), fileSafe(current.event.title) + '-guestlist.csv');
     }
     if (act === 'commcsv') {
@@ -1073,6 +1100,10 @@
     if (act === 'rmphoto') { setFormPhotos(formPhotos().filter(function (u) { return u !== id; })); return; }
     if (act === 'coverphoto') { var pl = formPhotos().filter(function (u) { return u !== id; }); pl.unshift(id); setFormPhotos(pl); return; }
     if (act === 'accounts') { accountsMenu(); return; }
+    if (act === 'delref') {
+      if (b.getAttribute('data-sure') !== '1') { b.setAttribute('data-sure', '1'); b.textContent = 'Tap again to delete'; return; }
+      api('DELETE', '/events/' + current.event.id + '/refs/' + id).then(loadRefs).catch(function (e) { say(e.message); }); return;
+    }
     if (act === 'qtystep') { var qf = document.getElementById('f-buy'), qi = qf.elements.namedItem('qty'); qi.value = (parseInt(qi.value, 10) || 1) + parseInt(id, 10); buyTotal(buyEv); return; }
     if (act === 'tixreleases') { api('PATCH', '/events/' + current.event.id + '/tickets/releases', { on: b.checked }).then(loadTix).catch(function (e) { say(e.message); }); return; }
     if (act === 'tixactive') { api('PATCH', '/events/' + current.event.id + '/tickets/' + id, { active: b.getAttribute('data-on') !== '1' }).then(loadTix).catch(function (e) { say(e.message); }); return; }
@@ -1213,7 +1244,7 @@
         d.inv = f.getAttribute('data-inv'); d.t = tokenFor(gid) || undefined; d.names = [];
         for (var k = 1; k < Number(f.getAttribute('data-slots')); k++) if (d['n' + k]) d.names.push(d['n' + k]);
       }
-      try { d.via = sessionStorage.getItem('via:' + gid) || undefined; } catch (e) {}
+      try { d.via = sessionStorage.getItem('via:' + gid) || undefined; d.ref = sessionStorage.getItem('ref:' + gid) || undefined; } catch (e) {}
       api('POST', '/p/' + gid + '/rsvp', d).then(function (r) {
         try { localStorage.setItem('gl:' + gid, r.token); } catch (e) {}
         history.replaceState({}, '', location.pathname + '?t=' + encodeURIComponent(r.token));
@@ -1226,10 +1257,12 @@
       }).catch(fail);
     } else if (/^f-tixcap-/.test(f.id)) {
       api('PATCH', '/events/' + current.event.id + '/tickets/' + f.getAttribute('data-id'), { capacity: d.capacity || 0, sale_ends: d.sale_ends ? new Date(d.sale_ends).toISOString() : '' }).then(function () { say('Saved.'); loadTix(); }).catch(fail);
+    } else if (f.id === 'f-ref') {
+      api('POST', '/events/' + current.event.id + '/refs', d).then(function () { say('Link ready. Copy it and send it.'); loadRefs(); }).catch(fail);
     } else if (f.id === 'f-tixtype') {
       api('POST', '/events/' + current.event.id + '/tickets', d).then(function () { say('Ticket added. It is on sale on your event page.'); loadTix(); }).catch(fail);
     } else if (f.id === 'f-buy') {
-      try { d.k = sessionStorage.getItem('k:' + f.getAttribute('data-id')) || undefined; } catch (e) {}
+      try { d.k = sessionStorage.getItem('k:' + f.getAttribute('data-id')) || undefined; d.ref = sessionStorage.getItem('ref:' + f.getAttribute('data-id')) || undefined; } catch (e) {}
       api('POST', '/p/' + f.getAttribute('data-id') + '/checkout', d).then(function (r) { location.href = r.url; }).catch(fail);
     } else if (f.id === 'f-scan') {
       if (d.code) checkTicket(scanState.event, d.code); f.reset(); btn.disabled = false;
