@@ -147,6 +147,8 @@ async function ensureSchema(env) {
     // Referral links (rsvp.fm/<handle>/<event>?ref=<code>): who brought visits, RSVPs and ticket sales
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_refs (id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL REFERENCES gl_events(id) ON DELETE CASCADE,
       code TEXT NOT NULL, label TEXT NOT NULL, visits INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE (event_id, code))`),
+    // Wrong door codes (rsvp.fm/scan), to slow down guessing
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_door_fails (ip TEXT NOT NULL, at TEXT NOT NULL DEFAULT (datetime('now')))`),
     // Magic links (forgotten password): one use, one hour
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_resets (token TEXT PRIMARY KEY, kind TEXT NOT NULL, account_id INTEGER NOT NULL, email TEXT NOT NULL,
       used INTEGER NOT NULL DEFAULT 0, expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`),
@@ -175,7 +177,7 @@ async function ensureSchema(env) {
   await addColumns(env, 'gl_tickets', [['email', "TEXT NOT NULL DEFAULT ''"], ['guest_id', 'INTEGER']]);
   await addColumns(env, 'gl_orders', [['ref', "TEXT NOT NULL DEFAULT ''"]]);
   await addColumns(env, 'gl_events', [['listed', 'INTEGER NOT NULL DEFAULT 1'], ['slug', 'TEXT'], ['photos', "TEXT NOT NULL DEFAULT '[]'"],
-    ['msg_subject', "TEXT NOT NULL DEFAULT ''"], ['msg_text', "TEXT NOT NULL DEFAULT ''"], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['msg_auto', 'INTEGER NOT NULL DEFAULT 0'], ['msg_photo', "TEXT NOT NULL DEFAULT ''"], ['guest_invites', 'INTEGER NOT NULL DEFAULT 1'], ['tix_releases', 'INTEGER NOT NULL DEFAULT 0'], ['meta_title', "TEXT NOT NULL DEFAULT ''"]]);
+    ['msg_subject', "TEXT NOT NULL DEFAULT ''"], ['msg_text', "TEXT NOT NULL DEFAULT ''"], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['msg_auto', 'INTEGER NOT NULL DEFAULT 0'], ['msg_photo', "TEXT NOT NULL DEFAULT ''"], ['guest_invites', 'INTEGER NOT NULL DEFAULT 1'], ['tix_releases', 'INTEGER NOT NULL DEFAULT 0'], ['meta_title', "TEXT NOT NULL DEFAULT ''"], ['door_code', "TEXT NOT NULL DEFAULT ''"]]);
   await addColumns(env, 'gl_ticket_types', [['sale_ends', "TEXT NOT NULL DEFAULT ''"], ['access_code', "TEXT NOT NULL DEFAULT ''"]]);
   await addColumns(env, 'gl_events', [['alias', "TEXT NOT NULL DEFAULT ''"]]);
   await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS gl_orgs_handle ON gl_orgs(handle)').run();
@@ -293,12 +295,14 @@ function eventFields(b) {
     listed: b.listed === false || b.listed === 0 || b.listed === '0' ? 0 : 1,
     guest_invites: b.guest_invites === false || b.guest_invites === 0 || b.guest_invites === '0' ? 0 : 1,
     // The title in link previews and the browser tab, when it should differ from the one on the page
-    meta_title: str(b.meta_title, 120)
+    meta_title: str(b.meta_title, 120),
+    // The code door staff type on rsvp.fm/scan to check tickets for this event, without an account
+    door_code: str(b.door_code, 40).toLowerCase().replace(/[^a-z0-9-]/g, '')
   };
 }
 const eventShape = (e) => ({
   id: e.id, title: e.title, starts_at: e.starts_at, ends_at: e.ends_at, venue: e.venue, city: e.city, details: e.details,
-  slug: e.slug || '', photos: photosOf(e), plus_max: e.plus_max, auto_confirm: !!e.auto_confirm, open: !!e.open, listed: e.listed == null ? true : !!e.listed, guest_invites: e.guest_invites == null ? true : !!e.guest_invites, meta_title: e.meta_title || '', created_at: e.created_at
+  slug: e.slug || '', photos: photosOf(e), plus_max: e.plus_max, auto_confirm: !!e.auto_confirm, open: !!e.open, listed: e.listed == null ? true : !!e.listed, guest_invites: e.guest_invites == null ? true : !!e.guest_invites, meta_title: e.meta_title || '', door_code: e.door_code || '', created_at: e.created_at
 });
 const updateShape = (u) => ({ id: u.id, text: u.text, photo: u.photo || '', guests_only: !!u.guests_only, emailed: !!u.emailed, created_at: u.created_at });
 const msgShape = (e) => ({ subject: e.msg_subject || '', text: e.msg_text || '', at: e.msg_at || '', auto: !!e.msg_auto });
@@ -481,7 +485,41 @@ async function verifyStripeSignature(secret, payload, header) {
 }
 const orderShape = (o) => ({ id: o.id, name: o.name, email: o.email, qty: o.qty, amount: money(o.amount, o.currency), status: o.status, type_id: o.type_id, created_at: o.created_at, paid_at: o.paid_at });
 
+// At the door: a scanned code (or the URL inside the QR), checked in once
+async function checkIn(env, e, code) {
+  const c = String(code || '').trim().replace(/^.*\/(t|pass)\//, '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 20);
+  const tk = c ? await env.DB.prepare('SELECT k.*, t.name AS type FROM gl_tickets k LEFT JOIN gl_ticket_types t ON t.id = k.type_id WHERE k.code = ?').bind(c).first() : null;
+  if (!tk) return { result: 'unknown', message: 'Unknown code.' };
+  if (tk.event_id !== e.id) return { result: 'other', message: 'This ticket is for another event.' };
+  if (tk.checked_in_at) return { result: 'used', message: 'Already scanned', holder: tk.holder, type: tk.type || 'Guestlist', at: tk.checked_in_at };
+  await env.DB.prepare(`UPDATE gl_tickets SET checked_in_at = datetime('now') WHERE id = ? AND checked_in_at IS NULL`).bind(tk.id).run();
+  return { result: 'ok', message: 'Welcome', holder: tk.holder, type: tk.type || 'Guestlist' };
+}
+const doorStats = async (env, e) => env.DB.prepare('SELECT COUNT(*) AS total, SUM(checked_in_at IS NOT NULL) AS inside FROM gl_tickets WHERE event_id = ?').bind(e.id).first();
+// rsvp.fm/scan: door staff, no account, a code per event (newest event with that code)
+async function doorEvent(env, request, code) {
+  const ip = request.headers.get('cf-connecting-ip') || 'x';
+  const { n } = await env.DB.prepare(`SELECT COUNT(*) AS n FROM gl_door_fails WHERE ip = ? AND at > datetime('now', '-10 minutes')`).bind(ip).first();
+  if (n >= 15) fail(429, 'Too many wrong codes. Wait 10 minutes.');
+  const c = String(code || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+  const e = c ? await env.DB.prepare(`SELECT * FROM gl_events WHERE door_code = ? ORDER BY starts_at DESC LIMIT 1`).bind(c).first() : null;
+  if (!e) { await env.DB.prepare('INSERT INTO gl_door_fails (ip) VALUES (?)').bind(ip).run(); fail(404, 'Wrong door code.'); }
+  return e;
+}
+
 async function ticketsApi({ request, env, url, method, path, seg, org, person, later }) {
+  if (path === '/api/door' && method === 'POST') {
+    const e = await doorEvent(env, request, (await body(request)).door);
+    const st = await doorStats(env, e);
+    return json({ event: { title: e.title, starts_at: e.starts_at, venue: e.venue, city: e.city }, total: st.total || 0, inside: st.inside || 0 });
+  }
+  if (path === '/api/door/checkin' && method === 'POST') {
+    const b = await body(request);
+    const e = await doorEvent(env, request, b.door);
+    const r = await checkIn(env, e, b.code);
+    const st = await doorStats(env, e);
+    return json({ ...r, total: st.total || 0, inside: st.inside || 0 });
+  }
   // Stripe tells us a payment went through
   if (path === '/api/stripe/webhook' && method === 'POST') {
     const payload = await request.text();
@@ -610,21 +648,16 @@ async function ticketsApi({ request, env, url, method, path, seg, org, person, l
     }
   }
   // At the door: a scanned code (or the URL inside the QR), checked in once
-  if (seg[2] === 'checkin' && method === 'POST') {
-    const b = await body(request);
-    const c = String(b.code || '').trim().replace(/^.*\/t\//, '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 20);
-    const tk = c ? await env.DB.prepare('SELECT k.*, t.name AS type FROM gl_tickets k LEFT JOIN gl_ticket_types t ON t.id = k.type_id WHERE k.code = ?').bind(c).first() : null;
-    if (!tk) return json({ result: 'unknown', message: 'Unknown code.' });
-    if (tk.event_id !== e.id) return json({ result: 'other', message: 'This ticket is for another event.' });
-    if (tk.checked_in_at) return json({ result: 'used', message: 'Already scanned', holder: tk.holder, type: tk.type || 'Guestlist', at: tk.checked_in_at });
-    await env.DB.prepare(`UPDATE gl_tickets SET checked_in_at = datetime('now') WHERE id = ? AND checked_in_at IS NULL`).bind(tk.id).run();
-    return json({ result: 'ok', message: 'Welcome', holder: tk.holder, type: tk.type || 'Guestlist' });
-  }
+  if (seg[2] === 'checkin' && method === 'POST') return json(await checkIn(env, e, (await body(request)).code));
   fail(404, 'Not found.');
 }
 
 // One-off: events Daniel asked for while the site had no other way in. Each runs once (gl_meta), never again even if the event is deleted.
 async function seedOnce(env) {
+  if (!(await metaGet(env, 'seed_door_astra28'))) {
+    await metaSet(env, 'seed_door_astra28', new Date().toISOString());
+    await env.DB.prepare("UPDATE gl_events SET door_code = 'astra28' WHERE id = 'beach2811' AND door_code = ''").run().catch(() => {});
+  }
   if (!(await metaGet(env, 'seed_beach_family'))) {
     await metaSet(env, 'seed_beach_family', new Date().toISOString());
     if (await env.DB.prepare("SELECT 1 FROM gl_events WHERE id = 'beach2811'").first()) {
@@ -961,9 +994,10 @@ async function api(request, env, url, ctx) {
       const slug = b.slug === undefined ? e.slug : await eventSlug(env, org.id, b, f.title, e.id);
       const before = photosOf(e);
       const photos = b.photos === undefined ? before : await ownPhotos(env, org, b.photos);
+      if (f.door_code && await env.DB.prepare('SELECT 1 FROM gl_events WHERE door_code = ? AND id != ?').bind(f.door_code, e.id).first()) fail(409, 'This door code is taken. Choose another one.');
       await env.DB.prepare(
-        `UPDATE gl_events SET title = ?, starts_at = ?, ends_at = ?, venue = ?, city = ?, details = ?, plus_max = ?, auto_confirm = ?, open = ?, listed = ?, slug = ?, photos = ?, guest_invites = ?, meta_title = ? WHERE id = ?`
-      ).bind(f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed, slug, JSON.stringify(photos), f.guest_invites, f.meta_title, e.id).run();
+        `UPDATE gl_events SET title = ?, starts_at = ?, ends_at = ?, venue = ?, city = ?, details = ?, plus_max = ?, auto_confirm = ?, open = ?, listed = ?, slug = ?, photos = ?, guest_invites = ?, meta_title = ?, door_code = ? WHERE id = ?`
+      ).bind(f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed, slug, JSON.stringify(photos), f.guest_invites, f.meta_title, f.door_code, e.id).run();
       await dropPhotos(env, org, before.filter((u) => !photos.includes(u)));
       return json({ id: e.id });
     }

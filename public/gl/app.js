@@ -363,8 +363,12 @@
       '<div id="scan-res" class="scan-res idle"><b>Ready</b><span>Point the camera at a ticket.</span></div>' +
       '<div class="scanbox"><video id="scan-v" playsinline muted></video><canvas id="scan-c" hidden></canvas></div>' +
       '<form id="f-scan" class="copyfield"><input name="code" placeholder="Or type the code" autocapitalize="characters" autocomplete="off" style="font-size:16px"><button class="btn small" type="submit">Check</button></form></div>';
-    var v = document.getElementById('scan-v'), last = '', lastAt = 0;
     scanState.event = id;
+    startCamera(function (txt) { checkTicket(id, txt); });
+  }
+  function startCamera(onCode) {
+    var v = document.getElementById('scan-v'), last = '', lastAt = 0;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { var r0 = document.getElementById('scan-res'); if (r0) r0.innerHTML = '<b>No camera</b><span>Type the codes below.</span>'; return; }
     navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false }).then(function (stream) {
       scanState.stream = stream; v.srcObject = stream; v.play();
       var det = ('BarcodeDetector' in window) ? new window.BarcodeDetector({ formats: ['qr_code'] }) : null;
@@ -373,7 +377,7 @@
         var c = document.getElementById('scan-c'), ctx2 = c.getContext('2d', { willReadFrequently: true });
         scanState.timer = setInterval(function () {
           if (!v.videoWidth || scanState.busy) return;
-          var found = function (txt) { if (!txt) return; var now = Date.now(); if (txt === last && now - lastAt < 4000) return; last = txt; lastAt = now; checkTicket(id, txt); };
+          var found = function (txt) { if (!txt) return; var now = Date.now(); if (txt === last && now - lastAt < 4000) return; last = txt; lastAt = now; onCode(txt); };
           if (det) det.detect(v).then(function (r) { if (r[0]) found(r[0].rawValue); }).catch(function () {});
           else { c.width = v.videoWidth; c.height = v.videoHeight; ctx2.drawImage(v, 0, 0); var img = ctx2.getImageData(0, 0, c.width, c.height); var r = window.jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' }); if (r) found(r.data); }
         }, 250);
@@ -389,12 +393,36 @@
   }
   function checkTicket(id, txt) {
     scanState.busy = true;
-    api('POST', '/events/' + id + '/checkin', { code: txt }).then(function (r) {
+    (scanState.door ? api('POST', '/door/checkin', { door: scanState.door, code: txt }) : api('POST', '/events/' + id + '/checkin', { code: txt })).then(function (r) {
+      if (scanState.door && typeof r.inside === 'number') { var cnt = document.getElementById('door-count'); if (cnt) cnt.textContent = r.inside + ' / ' + r.total + ' in'; }
       var el = document.getElementById('scan-res'); if (!el) return;
       el.className = 'scan-res ' + (r.result === 'ok' ? 'ok' : r.result === 'used' ? 'used' : 'bad');
       el.innerHTML = '<b>' + esc(r.message) + '</b><span>' + esc([r.holder, r.type].filter(Boolean).join(' · ')) + (r.at ? ' · at ' + esc(ago(r.at)) : '') + '</span>';
       if (navigator.vibrate) navigator.vibrate(r.result === 'ok' ? 80 : [60, 60, 60]);
     }).catch(function (e) { say(e.message); }).then(function () { setTimeout(function () { scanState.busy = false; }, 900); });
+  }
+
+  // rsvp.fm/scan: the door, for whoever scans (no account): a door code per event, then the camera
+  function viewDoor() {
+    stopScan(); header('guest');
+    var saved = ''; try { saved = localStorage.getItem('door') || ''; } catch (e) {}
+    var ask = function (err) {
+      main.innerHTML = '<div class="stack lg"><div class="stack"><p class="sc">Door</p><h1>Scan tickets</h1></div>' +
+        '<form id="f-door"><label><span>Door code</span><input name="door" required autocapitalize="none" autocomplete="off" placeholder="The code the organizer gave you" style="font-size:16px"></label>' +
+        '<p class="err"' + (err ? '' : ' hidden') + '>' + esc(err || '') + '</p><button class="btn wide" type="submit">Open the scanner</button></form></div>';
+    };
+    if (!saved) return ask();
+    api('POST', '/door', { door: saved }).then(function (j) {
+      var e = j.event;
+      main.innerHTML = '<div class="stack lg"><div class="toolbar"><div class="stack" style="gap:4px"><p class="sc">Door · ' + esc(saved) + '</p><h1 style="font-size:28px">' + esc(e.title) + '</h1></div>' +
+        '<button class="btn small line" data-act="doorout">Change</button></div>' +
+        '<p class="when" id="door-count">' + j.inside + ' / ' + j.total + ' in</p>' +
+        '<div id="scan-res" class="scan-res idle"><b>Ready</b><span>Point the camera at a QR code.</span></div>' +
+        '<div class="scanbox"><video id="scan-v" playsinline muted></video><canvas id="scan-c" hidden></canvas></div>' +
+        '<form id="f-scan" class="copyfield"><input name="code" placeholder="Or type the code" autocapitalize="characters" autocomplete="off" style="font-size:16px"><button class="btn small" type="submit">Check</button></form></div>';
+      scanState.door = saved; scanState.event = 'door';
+      startCamera(function (txt) { checkTicket('door', txt); });
+    }).catch(function (e) { try { localStorage.removeItem('door'); } catch (x) {} ask(e.message); });
   }
 
   // ---------- forgotten password: a magic link by email ----------
@@ -518,6 +546,7 @@
     return '<form id="f-event"' + (id ? ' data-id="' + esc(id) + '"' : '') + '>' +
       '<label><span>Event</span><input name="title" maxlength="120" required value="' + esc(v.title || '') + '" placeholder="Name of the night"></label>' +
       '<label><span>Title for links and the browser tab</span><input name="meta_title" maxlength="120" value="' + esc(v.meta_title || '') + '" placeholder="Same as the event"><small class="quiet">Shown in WhatsApp, Instagram and iMessage previews and in the tab. Leave empty to use the event name.</small></label>' +
+      '<label><span>Door code</span><input name="door_code" maxlength="40" autocapitalize="none" value="' + esc(v.door_code || '') + '" placeholder="astra28"><small class="quiet">Whoever scans at the door opens rsvp.fm/scan and types this code. No account needed.</small></label>' +
       '<label><span>Link</span><span class="prefix"><em>' + esc(location.host + '/' + org.handle + '/') + '</em><input name="slug" maxlength="60" autocapitalize="none" autocomplete="off" value="' + esc(v.slug || '') + '" placeholder="made from the name"></span></label>' +
       '<div class="two"><label><span>Starts</span><input name="starts_at" type="datetime-local" value="' + esc(v.starts_at || '') + '"></label>' +
       '<label><span>Ends (optional)</span><input name="ends_at" type="datetime-local" value="' + esc(v.ends_at || '') + '"></label></div>' +
@@ -1128,6 +1157,7 @@
     if (act === 'rmphoto') { setFormPhotos(formPhotos().filter(function (u) { return u !== id; })); return; }
     if (act === 'coverphoto') { var pl = formPhotos().filter(function (u) { return u !== id; }); pl.unshift(id); setFormPhotos(pl); return; }
     if (act === 'accounts') { accountsMenu(); return; }
+    if (act === 'doorout') { try { localStorage.removeItem('door'); } catch (e) {} viewDoor(); return; }
     if (act === 'delref') {
       if (b.getAttribute('data-sure') !== '1') { b.setAttribute('data-sure', '1'); b.textContent = 'Tap again to delete'; return; }
       api('DELETE', '/events/' + current.event.id + '/refs/' + id).then(loadRefs).catch(function (e) { say(e.message); }); return;
@@ -1292,6 +1322,9 @@
     } else if (f.id === 'f-buy') {
       try { d.k = sessionStorage.getItem('k:' + f.getAttribute('data-id')) || undefined; d.ref = sessionStorage.getItem('ref:' + f.getAttribute('data-id')) || undefined; } catch (e) {}
       api('POST', '/p/' + f.getAttribute('data-id') + '/checkout', d).then(function (r) { location.href = r.url; }).catch(fail);
+    } else if (f.id === 'f-door') {
+      try { localStorage.setItem('door', String(d.door).trim().toLowerCase()); } catch (e) {}
+      viewDoor();
     } else if (f.id === 'f-scan') {
       if (d.code) checkTicket(scanState.event, d.code); f.reset(); btn.disabled = false;
     } else if (f.id === 'f-post') {
@@ -1359,6 +1392,7 @@
     if ((m = /^\/e\/([a-z0-9]{4,16})\/scan$/.exec(p))) return viewScan(m[1]);
     if ((m = /^\/tickets\/([A-Za-z0-9_-]{20,64})$/.exec(p))) return viewTickets(m[1]);
     if ((m = /^\/pass\/([A-Za-z0-9]{6,20})$/.exec(p))) return viewPass(m[1]);
+    if (p === '/scan') return viewDoor();
     if ((m = /^\/([a-z0-9][a-z0-9_-]{1,29})\/([a-z0-9][a-z0-9-]{0,59})(?:\/([a-z0-9][a-z0-9-]{0,29}))?$/i.exec(p)) && m[1] !== 'e' && m[1] !== 'i') {
       loading();
       var secret = m[3] ? m[3].toLowerCase() : '';
