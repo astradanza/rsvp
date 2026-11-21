@@ -502,6 +502,7 @@
     var pm = v.plus_max || 0;
     return '<form id="f-event"' + (id ? ' data-id="' + esc(id) + '"' : '') + '>' +
       '<label><span>Event</span><input name="title" maxlength="120" required value="' + esc(v.title || '') + '" placeholder="Name of the night"></label>' +
+      '<label><span>Title for links and the browser tab</span><input name="meta_title" maxlength="120" value="' + esc(v.meta_title || '') + '" placeholder="Same as the event"><small class="quiet">Shown in WhatsApp, Instagram and iMessage previews and in the tab. Leave empty to use the event name.</small></label>' +
       '<label><span>Link</span><span class="prefix"><em>' + esc(location.host + '/' + org.handle + '/') + '</em><input name="slug" maxlength="60" autocapitalize="none" autocomplete="off" value="' + esc(v.slug || '') + '" placeholder="made from the name"></span></label>' +
       '<div class="two"><label><span>Starts</span><input name="starts_at" type="datetime-local" value="' + esc(v.starts_at || '') + '"></label>' +
       '<label><span>Ends (optional)</span><input name="ends_at" type="datetime-local" value="' + esc(v.ends_at || '') + '"></label></div>' +
@@ -808,7 +809,7 @@
     api('GET', '/p/' + id + (qs ? '?' + qs : '')).then(function (j) {
       var e = j.event, host = e.host, h = '<div class="stack lg">';
       header('guest'); theme(host.theme, host.custom);
-      document.title = e.title + ' — ' + host.name;
+      document.title = e.meta_title || (e.title + ' — ' + host.name);
       var ph = e.photos || [];
       if (ph[0]) h += '<img class="cover" src="' + esc(ph[0]) + '" alt="">';
       h += '<div class="stack center">' + (host.logo ? '<a href="/' + esc(host.handle) + '" style="text-decoration:none">' + logoImg(host.logo, 'mark') + '</a>' : '') +

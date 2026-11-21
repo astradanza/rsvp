@@ -170,7 +170,7 @@ async function ensureSchema(env) {
   ]);
   await addColumns(env, 'gl_guests', [['consent', 'INTEGER NOT NULL DEFAULT 0'], ['names', "TEXT NOT NULL DEFAULT ''"], ['invite_code', 'TEXT'], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['via', 'INTEGER']]);
   await addColumns(env, 'gl_events', [['listed', 'INTEGER NOT NULL DEFAULT 1'], ['slug', 'TEXT'], ['photos', "TEXT NOT NULL DEFAULT '[]'"],
-    ['msg_subject', "TEXT NOT NULL DEFAULT ''"], ['msg_text', "TEXT NOT NULL DEFAULT ''"], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['msg_auto', 'INTEGER NOT NULL DEFAULT 0'], ['msg_photo', "TEXT NOT NULL DEFAULT ''"], ['guest_invites', 'INTEGER NOT NULL DEFAULT 1'], ['tix_releases', 'INTEGER NOT NULL DEFAULT 0']]);
+    ['msg_subject', "TEXT NOT NULL DEFAULT ''"], ['msg_text', "TEXT NOT NULL DEFAULT ''"], ['msg_at', "TEXT NOT NULL DEFAULT ''"], ['msg_auto', 'INTEGER NOT NULL DEFAULT 0'], ['msg_photo', "TEXT NOT NULL DEFAULT ''"], ['guest_invites', 'INTEGER NOT NULL DEFAULT 1'], ['tix_releases', 'INTEGER NOT NULL DEFAULT 0'], ['meta_title', "TEXT NOT NULL DEFAULT ''"]]);
   await addColumns(env, 'gl_ticket_types', [['sale_ends', "TEXT NOT NULL DEFAULT ''"], ['access_code', "TEXT NOT NULL DEFAULT ''"]]);
   await addColumns(env, 'gl_events', [['alias', "TEXT NOT NULL DEFAULT ''"]]);
   await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS gl_orgs_handle ON gl_orgs(handle)').run();
@@ -286,12 +286,14 @@ function eventFields(b) {
     auto_confirm: b.auto_confirm ? 1 : 0,
     open: b.open === false || b.open === 0 || b.open === '0' ? 0 : 1,
     listed: b.listed === false || b.listed === 0 || b.listed === '0' ? 0 : 1,
-    guest_invites: b.guest_invites === false || b.guest_invites === 0 || b.guest_invites === '0' ? 0 : 1
+    guest_invites: b.guest_invites === false || b.guest_invites === 0 || b.guest_invites === '0' ? 0 : 1,
+    // The title in link previews and the browser tab, when it should differ from the one on the page
+    meta_title: str(b.meta_title, 120)
   };
 }
 const eventShape = (e) => ({
   id: e.id, title: e.title, starts_at: e.starts_at, ends_at: e.ends_at, venue: e.venue, city: e.city, details: e.details,
-  slug: e.slug || '', photos: photosOf(e), plus_max: e.plus_max, auto_confirm: !!e.auto_confirm, open: !!e.open, listed: e.listed == null ? true : !!e.listed, guest_invites: e.guest_invites == null ? true : !!e.guest_invites, created_at: e.created_at
+  slug: e.slug || '', photos: photosOf(e), plus_max: e.plus_max, auto_confirm: !!e.auto_confirm, open: !!e.open, listed: e.listed == null ? true : !!e.listed, guest_invites: e.guest_invites == null ? true : !!e.guest_invites, meta_title: e.meta_title || '', created_at: e.created_at
 });
 const updateShape = (u) => ({ id: u.id, text: u.text, photo: u.photo || '', guests_only: !!u.guests_only, emailed: !!u.emailed, created_at: u.created_at });
 const msgShape = (e) => ({ subject: e.msg_subject || '', text: e.msg_text || '', at: e.msg_at || '', auto: !!e.msg_auto });
@@ -917,9 +919,9 @@ async function api(request, env, url, ctx) {
     const slug = await eventSlug(env, org.id, b, f.title, id);
     const photos = await ownPhotos(env, org, b.photos);
     await env.DB.prepare(
-      `INSERT INTO gl_events (id, org_id, title, starts_at, ends_at, venue, city, details, plus_max, auto_confirm, open, listed, slug, photos, guest_invites)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(id, org.id, f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed, slug, JSON.stringify(photos), f.guest_invites).run();
+      `INSERT INTO gl_events (id, org_id, title, starts_at, ends_at, venue, city, details, plus_max, auto_confirm, open, listed, slug, photos, guest_invites, meta_title)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, org.id, f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed, slug, JSON.stringify(photos), f.guest_invites, f.meta_title).run();
     return json({ id, slug }, 201);
   }
   if (seg[0] === 'events' && seg[1]) {
@@ -940,8 +942,8 @@ async function api(request, env, url, ctx) {
       const before = photosOf(e);
       const photos = b.photos === undefined ? before : await ownPhotos(env, org, b.photos);
       await env.DB.prepare(
-        `UPDATE gl_events SET title = ?, starts_at = ?, ends_at = ?, venue = ?, city = ?, details = ?, plus_max = ?, auto_confirm = ?, open = ?, listed = ?, slug = ?, photos = ?, guest_invites = ? WHERE id = ?`
-      ).bind(f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed, slug, JSON.stringify(photos), f.guest_invites, e.id).run();
+        `UPDATE gl_events SET title = ?, starts_at = ?, ends_at = ?, venue = ?, city = ?, details = ?, plus_max = ?, auto_confirm = ?, open = ?, listed = ?, slug = ?, photos = ?, guest_invites = ?, meta_title = ? WHERE id = ?`
+      ).bind(f.title, f.starts_at, f.ends_at, f.venue, f.city, f.details, f.plus_max, f.auto_confirm, f.open, f.listed, slug, JSON.stringify(photos), f.guest_invites, f.meta_title, e.id).run();
       await dropPhotos(env, org, before.filter((u) => !photos.includes(u)));
       return json({ id: e.id });
     }
@@ -1436,7 +1438,7 @@ async function previewFor(env, url) {
     const photo = photosOf(e)[0];
     const where = [e.venue, e.city].filter(Boolean).join(', ');
     return {
-      title: e.title, image: abs(photo || e.org_logo), large: !!photo,
+      title: e.meta_title || e.title, image: abs(photo || e.org_logo), large: !!photo,
       description: [previewDate(e.starts_at), where, 'Hosted by ' + e.org_name].filter(Boolean).join(' · '),
       url: url.origin + url.pathname
     };
