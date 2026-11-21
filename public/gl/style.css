@@ -349,3 +349,10 @@ body[data-theme] label.tix-special>span.ts-main,body[data-theme] label.tix-speci
 .buy-total{display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 0 2px;border-top:1px solid var(--line)}
 .bt-calc{font-family:var(--text);font-size:12px;letter-spacing:.06em;color:var(--muted);text-align:center}
 .bt-sum{font:700 40px/1.05 var(--display);letter-spacing:-.03em;color:var(--ink)}
+/* visits per day (bars) and per country */
+.vbars{display:flex;align-items:flex-end;gap:3px;height:150px;padding-top:16px}
+.vbar{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:4px}
+.vbar i{display:block;width:100%;background:var(--accent);min-height:2px}
+.vbar .vn{font-family:var(--text);font-size:10px;color:var(--muted);line-height:1}
+.vbar .vd{font-family:var(--text);font-size:10px;color:var(--faint);line-height:1}
+.vline{display:block;height:3px;background:var(--accent);margin-top:6px;min-width:2px}

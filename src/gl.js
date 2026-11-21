@@ -147,6 +147,8 @@ async function ensureSchema(env) {
     // Referral links (rsvp.fm/<handle>/<event>?ref=<code>): who brought visits, RSVPs and ticket sales
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_refs (id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL REFERENCES gl_events(id) ON DELETE CASCADE,
       code TEXT NOT NULL, label TEXT NOT NULL, visits INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE (event_id, code))`),
+    // Page visits per event, per day (the visitor's day) and per country; the host's own visits are not counted
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_views (event_id TEXT NOT NULL, day TEXT NOT NULL, country TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (event_id, day, country))`),
     // Wrong door codes (rsvp.fm/scan), to slow down guessing
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS gl_door_fails (ip TEXT NOT NULL, at TEXT NOT NULL DEFAULT (datetime('now')))`),
     // Magic links (forgotten password): one use, one hour
@@ -1024,6 +1026,12 @@ async function api(request, env, url, ctx) {
       return json({ ok: true });
     }
     // Updates: posted on the event page; emailed (and pushed) to the guests only when asked
+    // Visits: per day and per country
+    if (seg[2] === 'views' && method === 'GET') {
+      const days = (await env.DB.prepare('SELECT day, SUM(n) AS n FROM gl_views WHERE event_id = ? GROUP BY day ORDER BY day').bind(e.id).all()).results;
+      const countries = (await env.DB.prepare('SELECT country, SUM(n) AS n FROM gl_views WHERE event_id = ? GROUP BY country ORDER BY n DESC').bind(e.id).all()).results;
+      return json({ total: days.reduce((a, d) => a + d.n, 0), days, countries });
+    }
     // Referral links: create, list with what each one brought, delete
     if (seg[2] === 'refs' && !seg[3] && method === 'GET') {
       const refs = (await env.DB.prepare('SELECT * FROM gl_refs WHERE event_id = ? ORDER BY id').bind(e.id).all()).results;
@@ -1323,6 +1331,15 @@ async function api(request, env, url, ctx) {
     if (!e) fail(404, 'This guestlist does not exist.');
     const shape = { ...eventShape(e), host: { name: e.org_name, kind: e.org_kind, handle: e.org_handle, logo: e.org_logo || '', theme: themeOf(e.org_theme, customOf(e)), custom: customOf(e), visibility: e.org_visibility, join: e.org_join === 'approval' ? 'approval' : 'open' } };
     delete shape.auto_confirm;
+    // A visit of the event page (sent once per browser session)
+    if (seg[2] === 'view' && method === 'POST') {
+      if (org && org.id === e.org_id) return json({ ok: false });
+      const b = await body(request);
+      const now = Date.now(), d = /^\d{4}-\d{2}-\d{2}$/.test(String(b.day)) && Math.abs(Date.parse(b.day + 'T12:00:00Z') - now) < 2 * 86400000 ? b.day : new Date(now).toISOString().slice(0, 10);
+      const country = /^[A-Z]{2}$/.test(String(request.cf && request.cf.country)) ? request.cf.country : 'XX';
+      await env.DB.prepare('INSERT INTO gl_views (event_id, day, country, n) VALUES (?, ?, ?, 1) ON CONFLICT(event_id, day, country) DO UPDATE SET n = n + 1').bind(e.id, d, country).run();
+      return json({ ok: true });
+    }
     // A visit through a referral link (the page sends it once per browser session)
     if (seg[2] === 'visit' && method === 'POST') {
       const b = await body(request);

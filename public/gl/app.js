@@ -649,7 +649,7 @@
       '<div class="acts"><button class="btn small" data-act="copylink" data-id="' + esc(url) + '">Copy link</button>' +
       (navigator.share ? '<button class="btn small line" data-act="sharelink" data-id="' + esc(url) + '">Share…</button>' : '') +
       '<a class="btn small line" href="' + esc(eventPath(e, org.handle)) + '" target="_blank" rel="noopener">View page</a></div></div>' +
-      (org.beta ? '<div id="tix-slot"></div>' : '') + invitesBox() + '<div id="refs-slot"></div>' + messageBox() +
+      '<div id="views-slot"></div>' + (org.beta ? '<div id="tix-slot"></div>' : '') + invitesBox() + '<div id="refs-slot"></div>' + messageBox() +
       '<div class="stats"><div class="stat"><b>' + c.requests + '</b><span>Requests</span></div><div class="stat"><b>' + c.people + '</b><span>People</span></div>' +
       '<div class="stat"><b>' + c.confirmed + '</b><span>Confirmed</span></div></div>' +
       '<div class="toolbar"><div class="seg" style="min-width:200px"><label><input type="radio" name="sort" value="arrival"' + (current.sort === 'arrival' ? ' checked' : '') + ' data-act="sort"><span>By arrival</span></label>' +
@@ -673,7 +673,7 @@
     h += '<hr class="rule"><div class="acts"><a class="link" href="/e/' + esc(e.id) + '/edit">Edit event</a><button class="link" data-act="toggleopen">' + (e.open ? 'Close the guestlist' : 'Reopen the guestlist') + '</button></div></div>';
     main.innerHTML = h;
     if (org.beta) loadTix();
-    loadRefs();
+    loadRefs(); loadViews();
   }
   // Unique links: "you've been invited to register N names on the guestlist"
   function inviteUrl(code) { return pageUrl(current.event, org.handle) + '?inv=' + code; }
@@ -718,6 +718,34 @@
       '<p class="err" hidden></p><div class="acts"><button class="btn small" type="submit">Post the update</button></div></form>' +
       updatesList(e.updates, true) + '</div>';
   }
+  // Visits of the event page: a bar per day, then by country
+  function loadViews() {
+    var slot = document.getElementById('views-slot'); if (!slot || !current) return;
+    api('GET', '/events/' + current.event.id + '/views').then(function (j) {
+      var h = '<div class="box"><span class="sc">Visits</span><div class="stats"><div class="stat"><b>' + j.total + '</b><span>Visits</span></div>';
+      var today = j.days.length ? j.days[j.days.length - 1] : null;
+      h += '<div class="stat"><b>' + (today ? today.n : 0) + '</b><span>' + (today ? esc(dayLabel(today.day)) : 'Today') + '</span></div></div>';
+      if (!j.total) { slot.innerHTML = h + '<p class="quiet small">Counted once per person and per day they open the page. Your own visits are not counted.</p></div>'; return; }
+      // fill the days without visits, last 30 days at most
+      var list = [], start = new Date(j.days[0].day + 'T12:00:00'), end = new Date(j.days[j.days.length - 1].day + 'T12:00:00'), map = {};
+      j.days.forEach(function (d) { map[d.day] = d.n; });
+      if ((end - start) / 86400000 > 29) start = new Date(end.getTime() - 29 * 86400000);
+      for (var t = start; t <= end; t = new Date(t.getTime() + 86400000)) { var k = t.toISOString().slice(0, 10); list.push({ day: k, n: map[k] || 0 }); }
+      var max = Math.max.apply(null, list.map(function (d) { return d.n; })) || 1;
+      h += '<div class="vbars">' + list.map(function (d) {
+        return '<div class="vbar" title="' + esc(dayLabel(d.day) + ': ' + d.n) + '"><span class="vn">' + (d.n || '') + '</span><i style="height:' + Math.max(2, Math.round(d.n / max * 100)) + '%"></i><span class="vd">' + esc(d.day.slice(8)) + '</span></div>';
+      }).join('') + '</div>';
+      var names; try { names = new Intl.DisplayNames(['en'], { type: 'region' }); } catch (e) { names = null; }
+      h += '<div class="list">' + j.countries.map(function (c) {
+        var label = c.country === 'XX' ? 'Unknown' : (names ? names.of(c.country) : c.country);
+        var pct = Math.round(c.n / j.total * 100);
+        return '<div class="item"><span class="main"><span class="t" style="font-size:16px">' + esc(flag(c.country) + ' ' + label) + '</span><span class="m"><span class="vline" style="width:' + pct + '%"></span></span></span><span class="s">' + c.n + ' · ' + pct + '%</span></div>';
+      }).join('') + '</div><p class="quiet small">Once per person and per day they open the page. Your own visits are not counted.</p></div>';
+      slot.innerHTML = h;
+    }).catch(function () { slot.innerHTML = ''; });
+  }
+  function flag(cc) { return /^[A-Z]{2}$/.test(cc) && cc !== 'XX' ? String.fromCodePoint(127397 + cc.charCodeAt(0), 127397 + cc.charCodeAt(1)) : '·'; }
+  function dayLabel(d) { var t = new Date(d + 'T12:00:00'); return isNaN(t) ? d : DAYS[t.getDay()].slice(0, 3) + ' ' + t.getDate() + ' ' + MONTHS[t.getMonth()].slice(0, 3); }
   // Referral links: one per promoter, ambassador or place you post it; what each one brought
   function loadRefs() {
     var slot = document.getElementById('refs-slot'); if (!slot || !current) return;
@@ -869,6 +897,14 @@
     var t = tokenFor(id), inv = inviteFor(id);
     var via0 = new URLSearchParams(location.search).get('via'); if (via0) { try { sessionStorage.setItem('via:' + id, via0); } catch (e) {} }
     var ref0 = (new URLSearchParams(location.search).get('ref') || '').toLowerCase();
+    // Count the visit once per browser and per day (the visitor's own day)
+    try {
+      var dd = new Date(), p2 = function (n) { return (n < 10 ? '0' : '') + n; }, dk = dd.getFullYear() + '-' + p2(dd.getMonth() + 1) + '-' + p2(dd.getDate());
+      if (localStorage.getItem('view:' + id) !== dk) {
+        localStorage.setItem('view:' + id, dk);
+        api('POST', '/p/' + id + '/view', { day: dk }).catch(function () {});
+      }
+    } catch (e) {}
     if (ref0) {
       try {
         sessionStorage.setItem('ref:' + id, ref0);
